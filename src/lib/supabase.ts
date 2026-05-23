@@ -1,0 +1,149 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { createClient } from '@supabase/supabase-js';
+import { Doctor, Drug, IcdCode, AuditLogEntry } from '../types';
+
+export function getSupabaseClient() {
+  const url = localStorage.getItem('SUPABASE_URL');
+  const anon = localStorage.getItem('SUPABASE_ANON_KEY');
+  if (!url || !anon) return null;
+  try {
+    return createClient(url, anon);
+  } catch (e) {
+    console.error('Supabase initialization failed:', e);
+    return null;
+  }
+}
+
+// ── INITIAL DEMO DATA ─────────────────────────────────────────
+
+export const DEMO_DOCTORS: Doctor[] = [
+  { id: '1', name: 'dr. Ahmad Fauzi', email: 'ahmad.fauzi@klinikusehat.id', phone: '081234567890', str: '1234-5678-9012-3456', specialization: 'Umum', clinic: 'Klinik Sehat Mandiri', status: 'active', ai_profile: 'gp', soap_month: 42, notes: 'Dokter utama klinik yang sangat ramah.', created_at: '2025-01-15T08:00:00Z' },
+  { id: '2', name: 'dr. Budi Santoso', email: 'budi.santoso@rsharapan.id', phone: '082345678901', str: '2345-6789-0123-4567', specialization: 'Umum', clinic: 'RS Harapan Sehat', status: 'active', ai_profile: 'gp', soap_month: 38, notes: 'Dokter jaga malam.', created_at: '2025-02-01T09:30:00Z' },
+  { id: '3', name: 'dr. Sari Indrawati, SpPD', email: 'sari.indrawati@rsbunda.id', phone: '083456789012', str: '3456-7890-1234-5678', specialization: 'Penyakit Dalam', clinic: 'RS Bunda Jakarta', status: 'trial', ai_profile: 'specialist', soap_month: 24, notes: 'Trial 14 hari, fokus spesialisasi penyakit dalam.', created_at: '2025-03-10T10:15:00Z' },
+  { id: '4', name: 'dr. Dewi Rahayu', email: 'dewi.rahayu@klinikpagi.id', phone: '084567890123', str: '4567-8901-2345-6789', specialization: 'Umum', clinic: 'Klinik Pagi Cerah', status: 'inactive', ai_profile: 'gp', soap_month: 0, notes: 'Sedang cuti panjang untuk studi lanjut.', created_at: '2025-01-20T11:00:00Z' },
+  { id: '5', name: 'dr. Rizki Pratama, SpA', email: 'rizki.pratama@rsanak.id', phone: '085678901234', str: '5678-9012-3456-7890', specialization: 'Anak', clinic: 'RS Anak Sehat', status: 'active', ai_profile: 'pediatric', soap_month: 55, notes: 'Pediatri andalan anak-anak.', created_at: '2025-02-15T14:20:00Z' },
+  { id: '6', name: 'dr. Nining Kurniasih, SpOG', email: 'nining.k@rsibu.id', phone: '086789012345', str: '6789-0123-4567-8901', specialization: 'Kandungan', clinic: 'RS Ibu & Anak', status: 'active', ai_profile: 'specialist', soap_month: 31, notes: 'Menangani konsultasi kehamilan reguler.', created_at: '2025-03-01T15:00:00Z' },
+];
+
+export const DEMO_DRUGS: Drug[] = [
+  { id: '1', generic: 'Amoxicillin', brand: 'Amoxil, Kalmoxillin', drug_class: 'Antibiotik', form: 'Kapsul 500mg, Sirup 125mg/5ml', dose_adult: '500mg 3x/hari 5-7 hari', dose_child: '25-50 mg/kgBB/hari dibagi 3 dosis', indication: 'Infeksi bakteri saluran napas, kemih, kulit', contra: 'Alergi penisilin', preg: 'B', risk: 'low', is_generic: true, interactions: 'Methotrexate, Warfarin', notes: 'Antibiotik lini pertama untuk ISPA dan ISK ringan.' },
+  { id: '2', generic: 'Paracetamol', brand: 'Panadol, Sanmol, Tempra', drug_class: 'Analgetik', form: 'Tablet 500mg, Sirup 120mg/5ml, Suppositoria', dose_adult: '500-1000mg setiap 4-6 jam, max 4g/hari', dose_child: '10-15 mg/kgBB/dosis setiap 4-6 jam', indication: 'Demam, nyeri ringan-sedang', contra: 'Gangguan hati berat', preg: 'B', risk: 'low', is_generic: true, interactions: 'Warfarin, Alkohol', notes: 'Obat penurun demam paling aman namun hepatotoksik jika overdosis.' },
+  { id: '3', generic: 'Amlodipin', brand: 'Norvasc, Tensivask', drug_class: 'Antihipertensi', form: 'Tablet 5mg, 10mg', dose_adult: '5-10mg 1x/hari', dose_child: '2.5-5mg 1x/hari (>6 tahun)', indication: 'Hipertensi, angina stabil', contra: 'Syok kardiogenik, hipotensi sirkulasi', preg: 'C', risk: 'moderate', is_generic: true, interactions: 'Simvastatin, Ketokonazol', notes: 'Monitor edema perifer atau bengkak pergelangan kaki.' },
+  { id: '4', generic: 'Metformin', brand: 'Glucophage, Diabex', drug_class: 'Antidiabetik', form: 'Tablet 500mg, 850mg', dose_adult: '500-2000mg/hari bersama makan', dose_child: '500-2000mg/hari (>10 tahun)', indication: 'Diabetes Melitus Tipe 2, PCOS', contra: 'GFR <30, asidosis laktak', preg: 'B', risk: 'low', is_generic: true, interactions: 'Alkohol, Kontras Iodinasi', notes: 'Diminum bersama makanan untuk meminimalkan efek samping saluran cerna.' },
+  { id: '5', generic: 'Warfarin', brand: 'Coumadin', drug_class: 'Antikoagulan', form: 'Tablet 2mg, 5mg', dose_adult: 'Individual berdasarkan target INR (2-3)', dose_child: 'Perlu monitoring ketat', indication: 'AF, DVT, Emboli Paru', contra: 'Perdarahan aktif, kehamilan trimester 1 & 3', preg: 'X', risk: 'high', is_generic: false, interactions: 'Aspirin, Amoxicillin, Kontrasepsi Oral', notes: 'MEMILIKI RISIKO TINGGI (HIGH RISK). Monitor INR ketat.' },
+  { id: '6', generic: 'Insulin Reguler', brand: 'Actrapid, Humulin R', drug_class: 'Antidiabetik', form: 'Injeksi 100 IU/ml', dose_adult: 'Individual berdasarkan GDS', dose_child: '0.5-1 IU/kgBB/hari', indication: 'DM Tipe 1, Ketoasidosis', contra: 'Hipoglikemia', preg: 'B', risk: 'high', is_generic: true, interactions: 'Beta-blocker, Alkohol', notes: 'HIGH ALERT. Risiko hipoglikemia berat jika salah hitung dosis.' },
+  { id: '7', generic: 'Omeprazole', brand: 'Losec, Prilos', drug_class: 'Gastrointestinal', form: 'Kapsul 20mg, 40mg', dose_adult: '20-40mg 1x/hari sebelum makan pagi', dose_child: '0.7-3.5 mg/kgBB/hari', indication: 'GERD, gastritis, peptic ulcer', contra: 'Hipersensitivitas', preg: 'C', risk: 'low', is_generic: true, interactions: 'Clopidogrel, Ketokonazol', notes: 'Diminum 30-60 menit sebelum makan pagi.' },
+  { id: '8', generic: 'Salbutamol', brand: 'Ventolin, Combivent', drug_class: 'Pernapasan', form: 'Inhaler MDI 100mcg, Nebulizer', dose_adult: '1-2 hirup (100-200mcg) jika sesak', dose_child: '0.15 mg/kgBB nebulisasi', indication: 'Asma, bronkospasme akut', contra: 'Aritmia berat', preg: 'C', risk: 'low', is_generic: true, interactions: 'Beta-blocker, Teofilin', notes: 'Bronkodilator cepat untuk serangan sesak napas akut.' },
+];
+
+export const DEMO_ICD: IcdCode[] = [
+  { id: '1', code: 'J06.9', name_id: 'Infeksi Saluran Pernapasan Atas Akut', name_lat: 'Acute Upper Respiratory Infection', chapter: 'X', freq: 284, notes: 'Keluhan utama batuk, pilek, demam, pegal umum.' },
+  { id: '2', code: 'K35', name_id: 'Appendisitis Akut', name_lat: 'Acute Appendicitis', chapter: 'XI', freq: 47, notes: 'Nyeri perut kanan bawah membakat, tanda perut positif.' },
+  { id: '3', code: 'I21', name_id: 'Infark Miokard Akut', name_lat: 'Acute Myocardial Infarction', chapter: 'IX', freq: 31, notes: 'Nyeri dada kiri tertekan atau tertindih menjalar ke lengan.' },
+  { id: '4', code: 'E11', name_id: 'Diabetes Melitus Tipe 2', name_lat: 'Type 2 Diabetes Mellitus', chapter: 'IV', freq: 198, notes: 'Evaluasi kepatuhan terapi oral, HbA1c berjangka.' },
+  { id: '5', code: 'I10', name_id: 'Hipertensi Esensial', name_lat: 'Essential Hypertension', chapter: 'IX', freq: 312, notes: 'Tekan darah tinggi esensial tanpa penyakit ginjal.' },
+  { id: '6', code: 'J18.9', name_id: 'Pneumonia yang Tidak Spesifik', name_lat: 'Pneumonia, Unspecified', chapter: 'X', freq: 89, notes: 'Bunyi paru ronki basah halus sedang.' },
+  { id: '7', code: 'N39.0', name_id: 'Infeksi Saluran Kemih', name_lat: 'Urinary Tract Infection', chapter: 'XIV', freq: 143, notes: 'Keluhan anyang-anyangan, disuria, nyeri suprapubik.' },
+  { id: '8', code: 'A09', name_id: 'Diare dan Gastroenteritis', name_lat: 'Diarrhoea and Gastroenteritis', chapter: 'I', freq: 176, notes: 'Analisis rehidrasi oralit dan loperamide jika perlu.' },
+];
+
+export const INTERACTIONS_DATA = [
+  { a: 'Warfarin', b: 'Aspirin', level: 'major', mechanism: 'Meningkatkan risiko perdarahan serius karena sinergi antikoagulan & antiplatelet.', action: 'Hindari kombinasi; jika terpaksa, monitor ketat hematologi & perdarahan.' },
+  { a: 'Warfarin', b: 'Amoxicillin', level: 'moderate', mechanism: 'Antibiotik mengganggu bakteri usus penghasil vitamin K, memperkuat efek warfarin.', action: 'Monitor target INR lebih sering selama mengonsumsi amoxicillin.' },
+  { a: 'Furosemide', b: 'Digoxin', level: 'moderate', mechanism: 'Loop diuretik memicu hipokalemia, meningkatkan risiko toksisitas digoxin.', action: 'Selalu periksa kadar kalium serum secara berkala dan berikan suplemen K jika rendah.' },
+  { a: 'Metformin', b: 'Alkohol', level: 'major', mechanism: 'Alkohol meningkatkan risiko asidosis laktat berbahaya akibat inhibisi laktat hati.', action: 'Edukasi pasien untuk tidak minum alkohol selama mengonsumsi metformin.' },
+  { a: 'Amlodipin', b: 'Simvastatin', level: 'moderate', mechanism: 'Amlodipin menghambat metabolisme simvastatin, meningkatkan rhabdomiolisis.', action: 'Jangan melebihi dosis simvastatin 20mg harian jika dikombinasikan dengan amlodipin.' },
+  { a: 'Morfin', b: 'Benzodiazepin', level: 'major', mechanism: 'Efek penekanan sistem saraf pusat aditif, memicu depresi pernapasan serius.', action: 'Kombinasi hanya diperkenankan pada kondisi ICU terpantau ketat.' },
+];
+
+export const HIGHRISK_DATA = [
+  { drug: 'Warfarin / Antikoagulan', drug_class: 'Antikoagulan', risk: 'Perdarahan spontan mayor, stroke hemoragik', protocol: 'Verifikasi target INR; alert interaksi otomatis; konfirmasi tertulis.' },
+  { drug: 'Insulin (Semua Jenis)', drug_class: 'Antidiabetik', risk: 'Hipoglikemia berat, penurunan kesadaran/koma', protocol: 'Instruksikan cek gula darah berkala; resepkan dosis berbasis unit presisi.' },
+  { drug: 'Morfin & Opioid', drug_class: 'Opiat', risk: 'Henti napas mendadak, ketergantungan fisik berat', protocol: 'Pantau saturasi oksigen (SpO2); selalu siapkan nalokson sebagai antidot.' },
+  { drug: 'Digoxin', drug_class: 'Kardiovaskular', risk: 'Aritmia ventrikel mematikan, intoksikasi glikosida', protocol: 'Monitor denyut jantung basal (Apical Pulse) dan kadar elektrolit serum.' },
+];
+
+export const DEMO_AUDIT_LOGS: AuditLogEntry[] = [
+  { id: 'log_a', ts: '2026-05-23 14:12:00', level: 'warning', category: 'DRUG', message: 'Interaksi obat mayor terdeteksi: Warfarin + Aspirin pada resep.', user: 'dr. Ahmad Fauzi', ip: '192.168.1.10', detail: JSON.stringify({ drugs: ['warfarin', 'aspirin'], patient_id: 'p102' }) },
+  { id: 'log_b', ts: '2026-05-23 14:10:15', level: 'success', category: 'SOAP', message: 'SOAP generated untuk pasien Dewi Sartika (ISPA, J06.9)', user: 'dr. Ahmad Fauzi', ip: '192.168.1.10', detail: JSON.stringify({ patient: 'Dewi Sartika', code: 'J06.9', duration: '45s' }) },
+  { id: 'log_c', ts: '2026-05-23 13:45:00', level: 'info', category: 'AI', message: 'Differential diagnosis terstruktur berhasil dibuat (3 DDx)', user: 'dr. Budi Santoso', ip: '192.168.1.11', detail: JSON.stringify({ original_symptom: 'Nyeri perut kanan bawah', hypothesis: ['K35', 'N39.0', 'D64'] }) },
+  { id: 'log_d', ts: '2026-05-23 13:43:10', level: 'critical', category: 'AI', message: 'RED FLAG: Akut peritonitis / Kemungkinan Appendisitis dianalisis.', user: 'dr. Budi Santoso', ip: '192.168.1.11', detail: JSON.stringify({ patient_age: 28, urgency: 'critical' }) },
+  { id: 'log_e', ts: '2026-05-23 12:00:15', level: 'info', category: 'AUTH', message: 'Login administrator berhasil.', user: 'admin@cennaai.id', ip: '203.0.113.45', detail: JSON.stringify({ device: 'Chrome on macOS' }) },
+  { id: 'log_f', ts: '2026-05-23 11:30:20', level: 'info', category: 'INTEGRATION', message: 'Sync sukses dengan rekam medis Medifirst (847 rekam medis)', user: 'SYSTEM', ip: '127.0.0.1', detail: JSON.stringify({ synced: 847, status: 'complete' }) },
+];
+
+
+// LOCAL STORAGE HELPERS WITH INITIAL SEEDING
+
+export function getLocalDoctors(): Doctor[] {
+  const stored = localStorage.getItem('CENNA_DOCTORS');
+  if (!stored) {
+    localStorage.setItem('CENNA_DOCTORS', JSON.stringify(DEMO_DOCTORS));
+    return DEMO_DOCTORS;
+  }
+  return JSON.parse(stored);
+}
+
+export function saveLocalDoctors(docs: Doctor[]) {
+  localStorage.setItem('CENNA_DOCTORS', JSON.stringify(docs));
+}
+
+export function getLocalDrugs(): Drug[] {
+  const stored = localStorage.getItem('CENNA_DRUGS');
+  if (!stored) {
+    localStorage.setItem('CENNA_DRUGS', JSON.stringify(DEMO_DRUGS));
+    return DEMO_DRUGS;
+  }
+  return JSON.parse(stored);
+}
+
+export function saveLocalDrugs(drugs: Drug[]) {
+  localStorage.setItem('CENNA_DRUGS', JSON.stringify(drugs));
+}
+
+export function getLocalIcd(): IcdCode[] {
+  const stored = localStorage.getItem('CENNA_ICD');
+  if (!stored) {
+    localStorage.setItem('CENNA_ICD', JSON.stringify(DEMO_ICD));
+    return DEMO_ICD;
+  }
+  return JSON.parse(stored);
+}
+
+export function saveLocalIcd(codes: IcdCode[]) {
+  localStorage.setItem('CENNA_ICD', JSON.stringify(codes));
+}
+
+export function getLocalLogs(): AuditLogEntry[] {
+  const stored = localStorage.getItem('CENNA_LOGS');
+  if (!stored) {
+    localStorage.setItem('CENNA_LOGS', JSON.stringify(DEMO_AUDIT_LOGS));
+    return DEMO_AUDIT_LOGS;
+  }
+  return JSON.parse(stored);
+}
+
+export function saveLocalLogs(logs: AuditLogEntry[]) {
+  localStorage.setItem('CENNA_LOGS', JSON.stringify(logs));
+}
+
+export function addLocalLog(level: AuditLogEntry['level'], category: AuditLogEntry['category'], message: string, detailObj?: object) {
+  const logs = getLocalLogs();
+  const newLog: AuditLogEntry = {
+    id: 'log_' + Date.now() + Math.random().toString(36).substring(2, 6),
+    ts: new Date().toISOString().replace('T', ' ').substring(0, 19),
+    level,
+    category,
+    message,
+    user: sessionStorage.getItem('cenna_admin') ? JSON.parse(sessionStorage.getItem('cenna_admin')!).name || 'Admin' : 'SYSTEM',
+    ip: '192.168.1.1' + Math.floor(Math.random() * 9),
+    detail: detailObj ? JSON.stringify(detailObj) : undefined
+  };
+  logs.unshift(newLog);
+  if (logs.length > 300) logs.pop();
+  saveLocalLogs(logs);
+}

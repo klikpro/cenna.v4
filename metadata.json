@@ -1,0 +1,6 @@
+{
+  "name": "CENNA AI",
+  "description": "Ambient Clinical Intelligence and smart medical workspace for Indonesian clinics.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

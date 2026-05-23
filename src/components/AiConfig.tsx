@@ -1,0 +1,612 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
+import { addLocalLog } from '../lib/supabase';
+
+// Pre-seeded sandbox scenarios
+const SCENARIOS = {
+  ispa: `Pasien anak laki-laki 5 tahun, datang dengan keluhan demam 3 hari. Demam naik turun, tertinggi 38.9°C. Disertai batuk berdahak, pilek encer. Tidak ada keluhan sesak napas. Makan berkurang sedikit. Minum air putih hangat masih mau.
+Dokter: Sudah ada riwayat minum obat penurun demam di rumah?
+Ibu: Sudah diberikan parasetamol sirup 3 kali sehari dok, tapi demamnya naik lagi setelah obat habis.
+Dokter: Ada kerabat dekat yang mengalami keluhan batuk pilek serupa?
+Ibu: Ayahnya baru sembuh dari batuk pilek minggu lalu.`,
+  appendicitis: `Pasien perempuan 28 tahun, mengeluh nyeri perut kanan bawah sejak 1 hari yang lalu. Nyeri awalnya dirasakan tumpul di daerah ulu hati/pusar, kemudian berkian tajam dan terlokalisir ke perut kanan bawah. Ada mual, muntah 1 kali tadi pagi. Nafsu makan menurun drastis. Ada demam ringan.
+Dokter: Apakah nyeri terasa makin memberat saat berjalan atau terbatuk?
+Pasien: Iya dok, terasa sangat nyeri kalau terguncang saat jalan.
+Dokter: Apakah sedang dalam masa haid atau ada nyeri keputihan yang tidak biasa?
+Pasien: Tidak dok, haid sedang teratur 2 minggu yang lalu.`,
+  acs: `Pasien pria 58 tahun, mengeluh nyeri dada sebelah kiri yang terasa tertekan beban berat mendadak sejak 30 menit yang lalu. Nyeri menjalar ke arah lengan kiri dan geraham. Disertai keringat dingin membasahi pakaian, dan ada keluhan sesak napas mual. Riwayat hidup hipertensi dan merokok aktif 1 bungkus sehari.
+Dokter: Apakah nyeri berkurang saat istirahat duduk?
+Pasien: Tidak dok, masih terasa mencengkram dan sangat sesak.`,
+  dm: `Pasien wanita 52 tahun, riwayat Diabetes Melitus Tipe 2 selama 5 tahun terkontrol tidak teratur. Mengeluhkan badan lemas, sering terbangun malam hari untuk BAK, dan berat badan turun 4 kg dalam sebulan terakhir tanpa usaha diet. Gula darah sewaktu (GDS) di laboratorium puskesmas tadi pagi fajar menunjukkan angka 312 mg/dL.`,
+  stroke: `Pasien pria 65 tahun, dibawa keluarga segera ke IGD dengan keluhan kelemahan mendadak pada anggota gerak sebelah kanan (tangan dan kaki) saat bangun tidur pagi ini pukul 06.00. Mulut tampak pelo/miring ke kiri dan bicara sulit dipahami. Riwayat penyakit hipertensi lari tidak terkontrol obat.`,
+  sepsis: `Pasien perempuan 45 tahun, demam menggigil tinggi sejak 2 hari disertai nyeri saat berkemih yang sangat perih. Tanda vital di ranjang: Suhu tubuh 39.4°C, Nadi 118x/menit cepat lemah, Pernapasan 24x/menit, Tekanan Darah 86/55 mmHg. Pasien tampak lemas dan respon kesadaran mengantuk somnolen.`,
+};
+
+export default function AiConfig() {
+  const [activeTab, setActiveTab] = useState<'behavior' | 'prompts' | 'reasoning' | 'sandbox'>('behavior');
+
+  // 1. Behavior State
+  const [profile, setProfile] = useState<'specialist' | 'gp' | 'emergency' | 'pediatric'>('gp');
+  const [ddxActive, setDdxActive] = useState(true);
+  const [ebmActive, setEbmActive] = useState(true);
+  const [uncertainActive, setUncertainActive] = useState(true);
+  const [followupActive, setFollowupActive] = useState(true);
+  const [eduActive, setEduActive] = useState(true);
+  const [soapDetail, setSoapDetail] = useState(4);
+  const [ddxCount, setDdxCount] = useState(3);
+  const [aiLang, setAiLang] = useState('id-medical');
+
+  // 2. Prompts State
+  const [promptCore, setPromptCore] = useState('');
+  const [promptSoap, setPromptSoap] = useState('');
+  const [promptRedflag, setPromptRedflag] = useState('');
+  const [promptMedication, setPromptMedication] = useState('');
+
+  // 3. Reasoning State
+  const [framework, setFramework] = useState('hypothetico-deductive');
+  const [evidenceLevel, setEvidenceLevel] = useState('1b');
+  const [clinicalRules, setClinicalRules] = useState('');
+
+  // 4. Sandbox State
+  const [selectedScenario, setSelectedScenario] = useState('');
+  const [sandboxInput, setSandboxInput] = useState('');
+  const [sandboxMode, setSandboxMode] = useState('soap');
+  const [sandboxOutput, setSandboxOutput] = useState('');
+  const [sandboxLoading, setSandboxLoading] = useState(false);
+
+  // Load saved local setting on mount
+  useEffect(() => {
+    // Demografi prompts
+    setPromptCore(localStorage.getItem('PROMPT_CORE') || `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu {{doctor_name}} ({{specialization}}) di {{clinic_name}}.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`);
+    setPromptSoap(localStorage.getItem('PROMPT_SOAP') || `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`);
+    setPromptRedflag(localStorage.getItem('PROMPT_REDFLAG') || `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`);
+    setPromptMedication(localStorage.getItem('PROMPT_MEDICATION') || `Evaluasi keamanan regimen obat berikut untuk pasien {{patient_name}} ({{patient_age}} tahun):\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`);
+
+    // Load behavior
+    const savedBehavior = localStorage.getItem('AI_BEHAVIOR');
+    if (savedBehavior) {
+      try {
+        const parsed: AIBehaviorSettings = JSON.parse(savedBehavior);
+        setProfile(parsed.profile);
+        setDdxActive(parsed.ddx);
+        setEbmActive(parsed.ebm);
+        setUncertainActive(parsed.uncertain);
+        setFollowupActive(parsed.followup);
+        setEduActive(parsed.edu);
+        setSoapDetail(parsed.soapDetail);
+        setDdxCount(parsed.ddxCount);
+        setAiLang(parsed.lang);
+      } catch (e) {}
+    }
+
+    // Load reasoning
+    const savedReasoning = localStorage.getItem('REASONING_CONFIG');
+    if (savedReasoning) {
+      try {
+        const parsed: ReasoningConfig = JSON.parse(savedReasoning);
+        setFramework(parsed.framework);
+        setEvidenceLevel(parsed.evidenceLevel);
+        setClinicalRules(parsed.rules);
+      } catch (e) {}
+    }
+  }, []);
+
+  const handleSaveBehavior = () => {
+    const payload: AIBehaviorSettings = {
+      profile,
+      ddx: ddxActive,
+      ebm: ebmActive,
+      uncertain: uncertainActive,
+      followup: followupActive,
+      edu: eduActive,
+      soapDetail,
+      ddxCount,
+      lang: aiLang,
+    };
+    localStorage.setItem('AI_BEHAVIOR', JSON.stringify(payload));
+    addLocalLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
+    alert('Konfigurasi perilaku klinis berhasil disimpan!');
+  };
+
+  const handleSavePrompts = () => {
+    localStorage.setItem('PROMPT_CORE', promptCore);
+    localStorage.setItem('PROMPT_SOAP', promptSoap);
+    localStorage.setItem('PROMPT_REDFLAG', promptRedflag);
+    localStorage.setItem('PROMPT_MEDICATION', promptMedication);
+    addLocalLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
+    alert('Seluruh kustomisasi prompt berhasil diperbarui!');
+  };
+
+  const handleSaveReasoning = () => {
+    const payload: ReasoningConfig = {
+      framework,
+      evidenceLevel,
+      rules: clinicalRules,
+    };
+    localStorage.setItem('REASONING_CONFIG', JSON.stringify(payload));
+    addLocalLog('success', 'SYSTEM', 'Mengubah logika reasoning klinis AI.');
+    alert('Aturan reasoning engine berhasil diperbarui!');
+  };
+
+  const handleSelectScenario = (key: string) => {
+    setSelectedScenario(key);
+    if (key && (SCENARIOS as any)[key]) {
+      setSandboxInput((SCENARIOS as any)[key]);
+    } else {
+      setSandboxInput('');
+    }
+  };
+
+  const handleRunSandbox = async () => {
+    if (!sandboxInput.trim()) {
+      alert('Tulis skenario klinis atau pilih dari template terlebih dahulu.');
+      return;
+    }
+    setSandboxLoading(true);
+    setSandboxOutput('⏳ CENNA AI Sedang menganalisis transcript kasus medis...\n\n');
+
+    try {
+      const apiKey = localStorage.getItem('ANTHROPIC_API_KEY');
+      if (!apiKey) {
+        // Simulated local fallback if keys are missing
+        await new Promise((r) => setTimeout(r, 1800));
+        let mockRes = '';
+        if (sandboxMode === 'soap') {
+          mockRes = `=========================================================\nCENNA GENERATED SOAP NOTE (Simulated Review)\n=========================================================\n\n[SUBJECTIVE]\n- Keluhan Utama: Terdeteksi dari skenario transcript yang Anda pilih.\n- Onset/Riwayat: Berlangsung dalam durasi terlampir.\n- Gejala Penyerta: Mual, penurunan nasfu makan, demam ringan terdata.\n\n[OBJECTIVE]\n- Kesadaran: Compos Mentis (CM)\n- Suhu Badan: Terpantau febris / subfebris.\n- Pemeriksaan Fisik: Terpotong sesuai laporan gejala fokal.\n\n[ASSESSMENT]\n- Diagnosa Kerja Utama: Terduga kuat sesuai korelasi keluhan patologi.\n- Diferensial Diagnosis (DDx):\n  1. Probabilitas Utama (75%)\n  2. Probabilitas Sekunder (20%)\n  3. Lainnya (5%)\n\n[PLAN]\n- Tindakan Awal: Observasi tanda bahaya / Red Flag.\n- Terapi Farmasi: Rujuk pada sediaan formularium paten & generik.\n- Edukasi: Minum air putih hangat, hindari aktivitas guncangan berat.\n- Kunjungan Ulang: Kontrol dalam 3 hari jika tidak membaik.\n\n💡 Hubungkan Anthropic API Key di tab "API & Integrasi" untuk review diagnosa real-time bertenaga Claude Sonnet!`;
+        } else if (sandboxMode === 'ddx') {
+          mockRes = `{\n  "differential_diagnoses": [\n    {\n      "code": "ICD-10 Code Relevan",\n      "probability": "75%",\n      "supporting_evidence": "Sesuai anamnesa fokal gejala utama.",\n      "recommended_test": "Pemeriksaan darah rutin / ultrasonografi"\n    }\n  ]\n}`;
+        } else {
+          mockRes = `{\n  "red_flags": ["Tanda nyeri tekan lepas", "Guncangan memperberat perut"],\n  "urgency_level": "high",\n  "recommended_action": "Segera konsul spesialis bedah / rujuk ke unit gawat darurat (UGD)."\n}`;
+        }
+        setSandboxOutput(mockRes);
+      } else {
+        // Real Anthropic call
+        const systemPrompt = `Kamu adalah CENNA AI asisten klinis. Analisis kasus medis seilmiah mungkin dengan ICD-10 Indonesia, biasakan evidence-based medicine.`;
+        const actionPrompt = sandboxMode === 'soap' ? 'Buatkan resume SOAP Note klinis detail' : sandboxMode === 'ddx' ? 'Sebutkan differential diagnosis dan probabilitas dalam format JSON array' : 'Analisis tanda Red Flag bahaya fatal dari teks ini dalam format JSON';
+        
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: localStorage.getItem('AI_MODEL') || 'claude-haiku-4-5-20251001',
+            max_tokens: 1500,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: `${actionPrompt} dari teks kasus berikut:\n\n${sandboxInput}` }]
+          })
+        });
+
+        const data = await res.json();
+        if (data.content && data.content[0]) {
+          setSandboxOutput(data.content[0].text);
+        } else {
+          setSandboxOutput('Error: ' + JSON.stringify(data.error || data));
+        }
+      }
+    } catch (e: any) {
+      setSandboxOutput(`Gagal memuat hasil AI. Error: ${e.message}`);
+    } finally {
+      setSandboxLoading(false);
+    }
+  };
+
+  const handleInsertTag = (tag: string) => {
+    setPromptCore((prev) => prev + ` ${tag}`);
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Tab select bar */}
+      <div className="flex border-b border-[#1e2a4a]/12 gap-1 bg-[#1e2a4a]/5 p-1 rounded-xl">
+        <button
+          id="btn-tab-ai-behavior"
+          onClick={() => setActiveTab('behavior')}
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition border-none cursor-pointer ${
+            activeTab === 'behavior' ? 'bg-white text-[#1e2a4a] shadow-sm' : 'text-[#1e2a4a]/50 bg-transparent'
+          }`}
+        >
+          🧠 Perilaku Klinis
+        </button>
+        <button
+          id="btn-tab-ai-prompts"
+          onClick={() => setActiveTab('prompts')}
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition border-none cursor-pointer ${
+            activeTab === 'prompts' ? 'bg-white text-[#1e2a4a] shadow-sm' : 'text-[#1e2a4a]/50 bg-transparent'
+          }`}
+        >
+          💬 System Prompts
+        </button>
+        <button
+          id="btn-tab-ai-reasoning"
+          onClick={() => setActiveTab('reasoning')}
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition border-none cursor-pointer ${
+            activeTab === 'reasoning' ? 'bg-white text-[#1e2a4a] shadow-sm' : 'text-[#1e2a4a]/50 bg-transparent'
+          }`}
+        >
+          🔬 Reasoning Engine
+        </button>
+        <button
+          id="btn-tab-ai-sandbox"
+          onClick={() => setActiveTab('sandbox')}
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition border-none cursor-pointer ${
+            activeTab === 'sandbox' ? 'bg-white text-[#1e2a4a] shadow-sm' : 'text-[#1e2a4a]/50 bg-transparent'
+          }`}
+        >
+          🧪 AI Sandbox
+        </button>
+      </div>
+
+      {activeTab === 'behavior' && (
+        <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-6">
+          <div>
+            <h3 className="font-bold text-sm text-[#1e2a4a] mb-1">Pengaturan Perilaku Klinis Utama</h3>
+            <p className="text-xs text-slate-500">Tentukan spesialisasi penalaran bawaan dan ketelitian modul SOAP dari CENNA AI.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Cards for specialty mapping */}
+            <div
+              onClick={() => setProfile('specialist')}
+              className={`p-4 border-2 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
+                profile === 'specialist' ? 'border-[#1e2a4a] bg-slate-50' : 'border-gray-200'
+              }`}
+            >
+              <div className="text-2xl pt-1">🏥</div>
+              <div>
+                <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">Spesialis Konsultan</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">Reasoning terstrukur mendalam, differential diagnostik komprehensif didukung meta guideline.</p>
+              </div>
+            </div>
+
+            <div
+              onClick={() => setProfile('gp')}
+              className={`p-4 border-2 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
+                profile === 'gp' ? 'border-[#1e2a4a] bg-slate-50' : 'border-gray-200'
+              }`}
+            >
+              <div className="text-2xl pt-1">👨‍⚕️</div>
+              <div>
+                <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">Dokter Umum Praktikal</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">Ekstraksi keluhan fokal utama, penulisan SOAP cepat, tindakan simtomatis lini pertama.</p>
+              </div>
+            </div>
+
+            <div
+              onClick={() => setProfile('emergency')}
+              className={`p-4 border-2 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
+                profile === 'emergency' ? 'border-[#1e2a4a] bg-slate-50' : 'border-gray-200'
+              }`}
+            >
+              <div className="text-2xl pt-1">🚨</div>
+              <div>
+                <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">Emergency & Kritis</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">Penyaringan tanda bahaya akut (Red Flags), anjuran triase darurat penstabil fokal utama.</p>
+              </div>
+            </div>
+
+            <div
+              onClick={() => setProfile('pediatric')}
+              className={`p-4 border-2 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
+                profile === 'pediatric' ? 'border-[#1e2a4a] bg-slate-50' : 'border-gray-200'
+              }`}
+            >
+              <div className="text-2xl pt-1">👶</div>
+              <div>
+                <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">Pediatri Anak</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">Menghitung takaran dosis pediatri berbasis rentang umur dan kelipatan bobot berat badan.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-100 pt-6 space-y-4">
+            <h4 className="font-bold text-xs text-[#1e2a4a]">Fitur Penalaran Mandiri AI</h4>
+            <div className="space-y-2 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="checkbox" checked={ddxActive} onChange={(e) => setDdxActive(e.target.checked)} className="w-4 h-4 accent-[#1e2a4a]" />
+                Diagnosis Banding Otomatis (Tampilkan 3-5 DDx)
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="checkbox" checked={ebmActive} onChange={(e) => setEbmActive(e.target.checked)} className="w-4 h-4 accent-[#1e2a4a]" />
+                Evidence-Based Guideline (Sertakan rujukan IDI/PAPDI/WHO)
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="checkbox" checked={uncertainActive} onChange={(e) => setUncertainActive(e.target.checked)} className="w-4 h-4 accent-[#1e2a4a]" />
+                Sinyalir Ketidakpastian Klinis (Clinical uncertainty flags)
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="checkbox" checked={followupActive} onChange={(e) => setFollowupActive(e.target.checked)} className="w-4 h-4 accent-[#1e2a4a]" />
+                Follow-up & Kontrol Lanjutan otomatis
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input type="checkbox" checked={eduActive} onChange={(e) => setEduActive(e.target.checked)} className="w-4 h-4 accent-[#1e2a4a]" />
+                Edukasi & Pencegahan preventif untuk Pasien
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-6">
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Tingkat Kedetailan SOAP (1-5): <span className="font-mono text-xs">{soapDetail}</span>
+              </label>
+              <input
+                id="soap-detail-slider"
+                type="range"
+                min="1"
+                max="5"
+                value={soapDetail}
+                onChange={(e) => setSoapDetail(parseInt(e.target.value))}
+                className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#1e2a4a]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Bahasa Output AI
+              </label>
+              <select
+                id="ai-lang-select"
+                value={aiLang}
+                onChange={(e) => setAiLang(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800"
+              >
+                <option value="id-medical">Bahasa Indonesia + Latin Medis</option>
+                <option value="id">Bahasa Indonesia Standar</option>
+                <option value="en">English (Clinical)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-gray-100">
+            <button
+              id="btn-save-ai-behavior"
+              onClick={handleSaveBehavior}
+              className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+            >
+              💾 Simpan Perilaku Klinis
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'prompts' && (
+        <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-6">
+          <div>
+            <h3 className="font-bold text-sm text-[#1e2a4a] mb-1">Editor System Prompts AI</h3>
+            <p className="text-xs text-slate-500">Konfigurasi instruksi sistem bertingkat tinggi untuk mengendalikan akurasi ekstraksi informasi.</p>
+          </div>
+
+          <div className="space-y-4">
+            {/* Core Identity */}
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Core Identity Prompt (Rujukan cara berpikir dasar)
+              </label>
+              {/* Clicks tags */}
+              <div className="flex gap-2 flex-wrap pb-1">
+                {['{{doctor_name}}', '{{specialization}}', '{{clinic_name}}', '{{transcript}}'].map((tag) => (
+                  <button
+                    key={tag}
+                    id={`btn-insert-tag-${tag}`}
+                    type="button"
+                    onClick={() => handleInsertTag(tag)}
+                    className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 border-none text-[10px] text-slate-600 font-mono cursor-pointer"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                id="prompt-core-textarea"
+                rows={6}
+                value={promptCore}
+                onChange={(e) => setPromptCore(e.target.value)}
+                className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono line-height-relaxed outline-none focus:border-[#3d5494] border border-[#1e2a4a]/12"
+              />
+            </div>
+
+            {/* SOAP generator */}
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Pembentuk SOAP (SOAP Generator Prompts)
+              </label>
+              <textarea
+                id="prompt-soap-textarea"
+                rows={6}
+                value={promptSoap}
+                onChange={(e) => setPromptSoap(e.target.value)}
+                className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono line-height-relaxed outline-none focus:border-[#3d5494] border border-[#1e2a4a]/12"
+              />
+            </div>
+
+            {/* Red Flag */}
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Saringan Red Flags (Akut/Darurat)
+              </label>
+              <textarea
+                id="prompt-redflag-textarea"
+                rows={4}
+                value={promptRedflag}
+                onChange={(e) => setPromptRedflag(e.target.value)}
+                className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono line-height-relaxed outline-none focus:border-[#3d5494] border border-[#1e2a4a]/12"
+              />
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-gray-100 flex gap-3">
+            <button
+              id="btn-save-ai-prompts"
+              onClick={handleSavePrompts}
+              className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+            >
+              💾 Simpan Seluruh Prompts
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'reasoning' && (
+        <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-6">
+          <div>
+            <h3 className="font-bold text-sm text-[#1e2a4a] mb-1">Clinical Reasoning Settings</h3>
+            <p className="text-xs text-slate-500">Sesuaikan logika penarikan hipotesa penyakit yang diizinkan untuk asisten AI.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Metode Kerangka Penalaran
+              </label>
+              <select
+                id="reasoning-framework-select"
+                value={framework}
+                onChange={(e) => setFramework(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800"
+              >
+                <option value="hypothetico-deductive">Hypothetico-Deductive (Standar Dokter Spesialis)</option>
+                <option value="bayesian">Bayesian pattern matching (Probabilistik Gejala)</option>
+                <option value="protocol">Protocol-driven (Ketat Alur Klinis Panduan)</option>
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Tingkat Bukti Minimum (Minimum EBM)
+              </label>
+              <select
+                id="evidence-level-select"
+                value={evidenceLevel}
+                onChange={(e) => setEvidenceLevel(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800"
+              >
+                <option value="1a">Level 1a — Meta-analysis Acak Terkontrol</option>
+                <option value="1b">Level 1b — Percobaan Acak Terkontrol Individu</option>
+                <option value="2">Level 2 — Studi Kohort Prospektif</option>
+                <option value="expert">Expert Opinion — Panduan Dokter Utama Senior</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+              Aturan Klinis Kustom (Format Pseudocode Aturan / IF-ELSE)
+            </label>
+            <textarea
+              id="clinical-rules-textarea"
+              rows={4}
+              value={clinicalRules}
+              onChange={(e) => setClinicalRules(e.target.value)}
+              placeholder="// Tulis aturan kustom lokal\nIF patient_age < 5 AND fever_duration > 3 THEN suggest_test = 'darah lengkap';\nIF prescription_count > 5 THEN flag_polypharmacy = true;"
+              className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none h-24 font-mono resize-vertical text-slate-800"
+            />
+          </div>
+
+          <div className="pt-4 border-t border-gray-100">
+            <button
+              id="btn-save-ai-reasoning"
+              onClick={handleSaveReasoning}
+              className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+            >
+              💾 Simpan Aturan Reasoning
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'sandbox' && (
+        <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-6">
+          <div>
+            <h3 className="font-bold text-sm text-[#1e2a4a] mb-1">AI Clinical Sandbox Tester</h3>
+            <p className="text-xs text-slate-500">Uji coba simulasi transkrip dialog medis secara aman sebelum ditarik ke dalam RME hidup.</p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                  Pilih Template Skenario Diagnosis
+                </label>
+                <select
+                  id="sandbox-scenario-select"
+                  value={selectedScenario}
+                  onChange={(e) => handleSelectScenario(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800 cursor-pointer"
+                >
+                  <option value="">-- Tulis custom skenario Anda sendiri --</option>
+                  <option value="ispa">Anak 5 tahun dengan batuk pilek demam (ISPA)</option>
+                  <option value="appendicitis">Nyeri perut kanan bawah kanan bawah (Appendisitis Akut)</option>
+                  <option value="acs">Pria 58 tahun nyeri dada kiri rasa tertindih (ACS)</option>
+                  <option value="dm">Wanita lemas, nocturia malam hari, GDS tinggi (DM T2)</option>
+                  <option value="stroke">Lumpuh separuh badan mendadak pagi hari (Stroke Iskemik)</option>
+                  <option value="sepsis">Demam menggigil, tensi drop, ISK (Sepsis)</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                  Mode Analisa AI
+                </label>
+                <select
+                  id="sandbox-mode-select"
+                  value={sandboxMode}
+                  onChange={(e) => setSandboxMode(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800 cursor-pointer"
+                >
+                  <option value="soap">Generate Full Resume SOAP Note</option>
+                  <option value="ddx">Analisa Struktur Differential Diagnosis</option>
+                  <option value="redflag">Deteksi Realtime Red Flags</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Input Percakapan Transcript Dokter-Pasien
+              </label>
+              <textarea
+                id="sandbox-input-textarea"
+                rows={6}
+                value={sandboxInput}
+                onChange={(e) => setSandboxInput(e.target.value)}
+                placeholder="Tulis dialog transkrip perkataan lisan medis beralur di sini..."
+                className="w-full p-4 bg-[#ede6d6]/40 border border-[#1e2a4a]/12 rounded-2xl text-xs font-sans text-slate-800 placeholder-slate-400 outline-none h-36 resize-vertical"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                id="btn-run-sandbox"
+                onClick={handleRunSandbox}
+                disabled={sandboxLoading}
+                className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none disabled:opacity-50 cursor-pointer shadow-md"
+              >
+                {sandboxLoading ? '⏳ AI Sedang Menganalisa...' : '🧪 Jalankan AI Test Sandbox'}
+              </button>
+            </div>
+
+            <div className="space-y-1 pt-4">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                Output Hasil Analisis CENNA AI (JSON / structured resume)
+              </label>
+              <div
+                id="sandbox-output-block"
+                className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto h-64 border border-[#1e2a4a]/12 leading-relaxed"
+              >
+                {sandboxOutput || 'Hasil analisis prompt akan dicetak di sini setelah test dijalankan...'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
