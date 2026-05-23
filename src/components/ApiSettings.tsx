@@ -33,9 +33,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [sttLang, setSttLang] = useState('id');
 
   useEffect(() => {
-    setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || '');
-    setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || '');
-    setSupabaseRef(localStorage.getItem('SUPABASE_REF') || '');
+    setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
+    setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
+    setSupabaseRef(localStorage.getItem('SUPABASE_REF') || 'vtwdgdbxgdmrravpdeix');
     setAnthropicKey(localStorage.getItem('ANTHROPIC_API_KEY') || '');
     setAiModel(localStorage.getItem('AI_MODEL') || 'claude-sonnet-4-6');
     setAiTemp(parseFloat(localStorage.getItem('AI_TEMPERATURE') || '0.3'));

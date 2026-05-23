@@ -7,8 +7,28 @@ import { createClient } from '@supabase/supabase-js';
 import { Doctor, Drug, IcdCode, AuditLogEntry } from '../types';
 
 export function getSupabaseClient() {
-  const url = localStorage.getItem('SUPABASE_URL');
-  const anon = localStorage.getItem('SUPABASE_ANON_KEY');
+  const defaultUrl = 'https://vtwdgdbxgdmrravpdeix.supabase.co';
+  const defaultAnon = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk';
+  const defaultRef = 'vtwdgdbxgdmrravpdeix';
+  const defaultServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUzNDU2NiwiZXhwIjoyMDk1MTEwNTY2fQ.YLKXpMtGSGz8CzZjDC6VjuQNtF2AvXVxlcfaDUvWplg';
+
+  // Seed locally if not set of any
+  if (!localStorage.getItem('SUPABASE_URL')) {
+    localStorage.setItem('SUPABASE_URL', defaultUrl);
+  }
+  if (!localStorage.getItem('SUPABASE_ANON_KEY')) {
+    localStorage.setItem('SUPABASE_ANON_KEY', defaultAnon);
+  }
+  if (!localStorage.getItem('SUPABASE_REF')) {
+    localStorage.setItem('SUPABASE_REF', defaultRef);
+  }
+  if (!localStorage.getItem('SUPABASE_SERVICE_KEY')) {
+    localStorage.setItem('SUPABASE_SERVICE_KEY', defaultServiceKey);
+  }
+
+  const url = localStorage.getItem('SUPABASE_URL') || defaultUrl;
+  const anon = localStorage.getItem('SUPABASE_ANON_KEY') || defaultAnon;
+
   if (!url || !anon) return null;
   try {
     return createClient(url, anon);
