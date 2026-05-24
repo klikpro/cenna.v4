@@ -3,54 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export interface Doctor {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  str?: string;
-  specialization: string;
-  clinic?: string;
-  status: 'active' | 'trial' | 'inactive' | 'suspended';
-  ai_profile: 'specialist' | 'gp' | 'emergency' | 'pediatric';
-  soap_month: number;
-  notes?: string;
-  created_at?: string;
-}
-
-export interface Drug {
-  id: string;
-  generic: string;
-  brand?: string;
-  drug_class: string;
-  form?: string;
-  dose_adult?: string;
-  dose_child?: string;
-  indication?: string;
-  contra?: string;
-  preg: 'A' | 'B' | 'C' | 'D' | 'X';
-  risk: 'low' | 'moderate' | 'high';
-  is_generic: boolean;
-  interactions?: string;
-  notes?: string;
-}
-
-export interface IcdCode {
-  id: string;
-  code: string;
-  name_id: string;
-  name_lat?: string;
-  chapter: string;
-  notes?: string;
-  freq: number;
-  custom?: boolean;
-}
-
 export interface AuditLogEntry {
   id: string;
   ts: string;
   level: 'info' | 'success' | 'warning' | 'error' | 'critical';
-  category: 'AUTH' | 'AI' | 'SOAP' | 'DRUG' | 'DOCTOR' | 'SYSTEM' | 'INTEGRATION';
+  category: 'AUTH' | 'AI' | 'SOAP' | 'SYSTEM' | 'INTEGRATION';
   message: string;
   user: string;
   ip: string;
@@ -61,8 +18,6 @@ export interface NotificationSettings {
   redflag: boolean;
   daily: boolean;
   error: boolean;
-  drug: boolean;
-  doctor: boolean;
   token: boolean;
   emails: string;
 }

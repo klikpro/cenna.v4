@@ -7,31 +7,21 @@ import React, { useState, useEffect } from 'react';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
-import Doctors from './components/Doctors';
-import Drugs from './components/Drugs';
-import Icd10 from './components/Icd10';
 import AiConfig from './components/AiConfig';
 import ApiSettings from './components/ApiSettings';
 import AuditLog from './components/AuditLog';
 import Settings from './components/Settings';
 import {
-  getSupabaseClient,
   sbGetSession,
   sbSignOut,
-  sbGetDoctors, sbUpsertDoctor, sbDeleteDoctor,
-  sbGetDrugs,   sbUpsertDrug,  sbDeleteDrug,
-  sbGetIcd,     sbUpsertIcd,   sbDeleteIcd, sbImportIcd,
-  sbGetLogs,    sbAddLog,      sbClearLogs,
+  sbGetLogs, sbAddLog, sbClearLogs,
 } from './lib/supabase';
-import { Doctor, Drug, IcdCode, AuditLogEntry } from './types';
+import { AuditLogEntry } from './types';
 
 type ActivePage =
   | 'landing'
   | 'login'
   | 'dashboard'
-  | 'doctors'
-  | 'drugs'
-  | 'icd'
   | 'ai'
   | 'api'
   | 'logs'
@@ -46,27 +36,19 @@ export default function App() {
   const [page, setPage] = useState<ActivePage>('landing');
   const [adminSession, setAdminSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-
-  // Global synchronized states
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [drugs, setDrugs] = useState<Drug[]>([]);
-  const [icdCodes, setIcdCodes] = useState<IcdCode[]>([]);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
 
-  // ─ Boot: restore session from Supabase Auth (token auto-refresh) ───────────
+  // ─ Boot: restore session from Supabase Auth ──────────────────────────────
   useEffect(() => {
     async function boot() {
       const session = await sbGetSession();
       if (session && isAdminRoute()) {
-        // Hanya restore ke dashboard jika URL memang /admin
         setAdminSession(session);
-        await loadAllData(session.name);
+        await loadAllData();
         setPage('dashboard');
       } else if (!session && isAdminRoute()) {
-        // /admin URL tapi tidak ada sesi → tampilkan login
         setPage('login');
       } else {
-        // URL bukan /admin (termasuk landing page) → selalu tampilkan landing
         setPage('landing');
       }
       setLoading(false);
@@ -74,22 +56,14 @@ export default function App() {
     boot();
   }, []);
 
-  async function loadAllData(userName: string) {
-    const [d, dr, ic, lg] = await Promise.all([
-      sbGetDoctors(),
-      sbGetDrugs(),
-      sbGetIcd(),
-      sbGetLogs(),
-    ]);
-    setDoctors(d);
-    setDrugs(dr);
-    setIcdCodes(ic);
+  async function loadAllData() {
+    const lg = await sbGetLogs();
     setLogs(lg);
   }
 
   const handleLoginSuccess = async (session: any) => {
     setAdminSession(session);
-    await loadAllData(session.name);
+    await loadAllData();
     setPage('dashboard');
   };
 
@@ -97,72 +71,8 @@ export default function App() {
     if (confirm('Yakin ingin keluar dari Admin Panel?')) {
       await sbSignOut();
       setAdminSession(null);
-      // Return to landing or /admin login depending on route
-      if (isAdminRoute()) {
-        setPage('login');
-      } else {
-        setPage('landing');
-      }
+      setPage(isAdminRoute() ? 'login' : 'landing');
     }
-  };
-
-  // Doctors Mutations
-  const handleSaveDoctor = async (newDoc: Doctor) => {
-    const isNew = !doctors.find(x => x.id === newDoc.id);
-    await sbUpsertDoctor(newDoc);
-    setDoctors(prev => isNew ? [newDoc, ...prev] : prev.map(x => x.id === newDoc.id ? newDoc : x));
-    await sbAddLog('success', 'DOCTOR', `Profil dokter "${newDoc.name}" ${isNew ? 'ditambahkan' : 'diperbarui'}.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  const handleDeleteDoctor = async (id: string) => {
-    const target = doctors.find(x => x.id === id);
-    await sbDeleteDoctor(id);
-    setDoctors(prev => prev.filter(x => x.id !== id));
-    await sbAddLog('warning', 'DOCTOR', `Dokter "${target?.name || id}" dihapus dari sistem.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  // Drugs Mutations
-  const handleSaveDrug = async (newDrug: Drug) => {
-    const isNew = !drugs.find(x => x.id === newDrug.id);
-    await sbUpsertDrug(newDrug);
-    setDrugs(prev => isNew ? [newDrug, ...prev] : prev.map(x => x.id === newDrug.id ? newDrug : x));
-    await sbAddLog('success', 'DRUG', `Obat "${newDrug.generic}" ${isNew ? 'didaftarkan' : 'diperbarui'}.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  const handleDeleteDrug = async (id: string) => {
-    const target = drugs.find(x => x.id === id);
-    await sbDeleteDrug(id);
-    setDrugs(prev => prev.filter(x => x.id !== id));
-    await sbAddLog('warning', 'DRUG', `Obat "${target?.generic || id}" dihapus.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  // ICD Mutations
-  const handleSaveIcd = async (newCode: IcdCode) => {
-    const isNew = !icdCodes.find(x => x.id === newCode.id);
-    await sbUpsertIcd(newCode);
-    setIcdCodes(prev => isNew ? [newCode, ...prev] : prev.map(x => x.id === newCode.id ? newCode : x));
-    await sbAddLog('success', 'SYSTEM', `Kode ICD-10 "${newCode.code}" ${isNew ? 'ditambahkan' : 'diperbarui'}.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  const handleDeleteIcd = async (id: string) => {
-    const target = icdCodes.find(x => x.id === id);
-    await sbDeleteIcd(id);
-    setIcdCodes(prev => prev.filter(x => x.id !== id));
-    await sbAddLog('warning', 'SYSTEM', `Kode ICD-10 "${target?.code || id}" dihapus.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-  };
-
-  const handleImportIcdCodes = async (newCodes: IcdCode[]) => {
-    await sbImportIcd(newCodes);
-    setIcdCodes(await sbGetIcd());
-    await sbAddLog('success', 'SYSTEM', `Mengimpor ${newCodes.length} kode ICD-10.`, adminSession?.name);
-    setLogs(await sbGetLogs());
-    alert(`Sukses mengimpor ${newCodes.length} kode ICD-10!`);
   };
 
   const handleClearLogs = async () => {
@@ -172,7 +82,7 @@ export default function App() {
     }
   };
 
-  // ─ Loading splash ─────────────────────────────────────────────────────────────────────
+  // ─ Loading splash ─────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-[#0d1a36] flex items-center justify-center">
@@ -181,7 +91,6 @@ export default function App() {
     );
   }
 
-  // Route rendering coordinators
   if (page === 'landing') {
     return <LandingPage onLoginClick={() => setPage('login')} />;
   }
@@ -195,7 +104,7 @@ export default function App() {
     );
   }
 
-  // Dashboard admin dashboard layout wrap
+  // ─ Admin layout ───────────────────────────────────────────────────────────
   const avatarInitials = adminSession?.name
     ? adminSession.name
         .replace(/^dr\.\s*/i, '')
@@ -206,11 +115,31 @@ export default function App() {
         .toUpperCase()
     : 'AD';
 
+  const PAGE_TITLE: Record<ActivePage, string> = {
+    landing:   '',
+    login:     '',
+    dashboard: 'Overview Dashboard',
+    ai:        'Asisten AI & Prompts',
+    api:       'API & Integrasi',
+    logs:      'Keamanan Audit Log',
+    settings:  'Pengaturan',
+  };
+
+  const PAGE_SUB: Record<ActivePage, string> = {
+    landing:   '',
+    login:     '',
+    dashboard: 'Pusat Kontrol CENNA AI Voice Assistant',
+    ai:        'Konfigurasi prompt, perilaku, dan reasoning engine AI',
+    api:       'Kredensial Supabase dan integrasi STT/TTS',
+    logs:      'Rekam jejak aktivitas sistem',
+    settings:  'Identitas platform dan preferensi',
+  };
+
   return (
     <div className="flex min-h-screen bg-[#f8f5f0] text-[#1e2a4a] font-sans">
-      {/* Absolute sidebar */}
+      {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 w-60 bg-[#1e2a4a] text-white flex flex-col z-40 hidden md:flex">
-        {/* Logo header */}
+        {/* Logo */}
         <div className="p-6 border-b border-white/5">
           <div className="flex items-center gap-3">
             <div className="w-[36px] h-[36px] rounded-full bg-white/15 border border-white/20 flex items-center justify-center font-bold text-sm">
@@ -223,7 +152,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sidebar Nav menu links */}
+        {/* Nav */}
         <nav className="flex-1 p-4 space-y-1">
           <div className="text-[10px] font-bold text-white/30 tracking-widest uppercase px-3 py-2">
             Overview
@@ -239,23 +168,7 @@ export default function App() {
           </button>
 
           <div className="text-[10px] font-bold text-white/30 tracking-widest uppercase px-3 py-2 pt-4">
-            Manajemen
-          </div>
-          <button
-            id="btn-sidebar-doctors"
-            onClick={() => setPage('doctors')}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
-              page === 'doctors' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span>👨‍⚕️</span> Manajemen Dokter
-            <span className="ml-auto bg-white/15 px-2 py-0.5 rounded-full text-[10px] text-white/80">
-              {doctors.length}
-            </span>
-          </button>
-
-          <div className="text-[10px] font-bold text-white/30 tracking-widest uppercase px-3 py-2 pt-4">
-            AI & Konten
+            AI Voice Assistant
           </div>
           <button
             id="btn-sidebar-ai"
@@ -267,28 +180,6 @@ export default function App() {
             <span>🤖</span> Konfigurasi AI
           </button>
           <button
-            id="btn-sidebar-icd"
-            onClick={() => setPage('icd')}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
-              page === 'icd' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span>📋</span> Database ICD-10
-          </button>
-          <button
-            id="btn-sidebar-drugs"
-            onClick={() => setPage('drugs')}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
-              page === 'drugs' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span>💊</span> Database Obat
-          </button>
-
-          <div className="text-[10px] font-bold text-white/30 tracking-widest uppercase px-3 py-2 pt-4">
-            Sistem
-          </div>
-          <button
             id="btn-sidebar-api"
             onClick={() => setPage('api')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
@@ -297,6 +188,10 @@ export default function App() {
           >
             <span>🔑</span> API & Integrasi
           </button>
+
+          <div className="text-[10px] font-bold text-white/30 tracking-widest uppercase px-3 py-2 pt-4">
+            Sistem
+          </div>
           <button
             id="btn-sidebar-logs"
             onClick={() => setPage('logs')}
@@ -322,7 +217,7 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Sidebar avatar info footer */}
+        {/* Footer avatar */}
         <div className="p-4 border-t border-white/5 space-y-2 bg-[#121c33]">
           <div className="flex items-center gap-3">
             <div className="w-[34px] h-[34px] rounded-full bg-slate-100 flex items-center justify-center font-bold text-[#1e2a4a] text-xs">
@@ -343,36 +238,22 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Right Content container */}
+      {/* Main content */}
       <main className="flex-1 md:ml-60 flex flex-col min-h-screen">
-        {/* Sticky blurred topbar */}
+        {/* Topbar */}
         <header className="sticky top-0 z-30 bg-[#f8f5f0]/90 backdrop-blur-md border-b border-[#1e2a4a]/12 h-16 flex items-center justify-between px-6 md:px-8">
           <div>
             <h1 className="font-extrabold text-base md:text-lg text-[#1e2a4a] leading-tight">
-              {page === 'dashboard' ? 'Overview Dashboard' :
-               page === 'doctors' ? 'Manajemen Akun Dokter' :
-               page === 'drugs' ? 'Medikasi & Formularium' :
-               page === 'icd' ? 'Diagnosis ICD-10' :
-               page === 'ai' ? 'Asisten AI & Prompts' :
-               page === 'api' ? 'Saringan API & Database' :
-               page === 'logs' ? 'Keamanan Audit Log' : 'Pengaturan Klinik'}
+              {PAGE_TITLE[page]}
             </h1>
             <p className="text-[11px] text-[#1e2a4a]/50 hidden sm:block">
-              {page === 'dashboard' ? 'Asisten Ambient Cockpit Terpadu' :
-               page === 'doctors' ? 'Mengatur rujukan kredensial surat STR dokter klinik' :
-               page === 'drugs' ? 'Verifikasi interaksi obat mayor fokal penunjang keselamatan terapi' :
-               page === 'icd' ? 'Tabel klasifikasi diagnosis medis BPJS' :
-               page === 'ai' ? 'Optimasi instructions prompt core' :
-               page === 'api' ? 'Kredensial database Supabase dan integrasi Whisper STT' :
-               page === 'logs' ? 'System logs' : 'Aturan visual faskes platform'}
+              {PAGE_SUB[page]}
             </p>
           </div>
-
           <div className="flex items-center gap-3">
             <button
               id="btn-topbar-pill-home"
               onClick={async () => {
-                // BUG-08 FIX: Revoke sesi Supabase sebelum reset state lokal
                 await sbSignOut();
                 setAdminSession(null);
                 setPage('landing');
@@ -388,54 +269,19 @@ export default function App() {
           </div>
         </header>
 
-        {/* Dynamic Inner body display based on routers page state */}
+        {/* Page content */}
         <div className="p-6 md:p-8 flex-1 max-w-6xl w-full mx-auto">
           {page === 'dashboard' && (
             <Dashboard
-              doctors={doctors}
               logs={logs}
-              onNavigate={(val) => setPage(val as any)}
-              isDemoMode={false}
+              onNavigate={(val) => setPage(val as ActivePage)}
             />
           )}
-
-          {page === 'doctors' && (
-            <Doctors
-              doctors={doctors}
-              onSaveDoctor={handleSaveDoctor}
-              onDeleteDoctor={handleDeleteDoctor}
-            />
-          )}
-
-          {page === 'drugs' && (
-            <Drugs
-              drugs={drugs}
-              onSaveDrug={handleSaveDrug}
-              onDeleteDrug={handleDeleteDrug}
-            />
-          )}
-
-          {page === 'icd' && (
-            <Icd10
-              icdCodes={icdCodes}
-              onSaveIcd={handleSaveIcd}
-              onDeleteIcd={handleDeleteIcd}
-              onImportCodes={handleImportIcdCodes}
-            />
-          )}
-
           {page === 'ai' && <AiConfig />}
-
           {page === 'api' && (
-            <ApiSettings
-              onSettingsSaved={() => {
-                // reload db status/connectivity triggers
-              }}
-            />
+            <ApiSettings onSettingsSaved={() => {}} />
           )}
-
           {page === 'logs' && <AuditLog logs={logs} onClearLogs={handleClearLogs} />}
-
           {page === 'settings' && (
             <Settings
               onAdminProfileUpdated={(name) => {
