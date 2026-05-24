@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
 import { addLocalLog, sbGetSetting, sbSetSetting } from '../lib/supabase';
+import { callActiveAI, AI_PROVIDERS } from './ApiSettings';
 
 // Pre-seeded sandbox scenarios
 const SCENARIOS = {
@@ -173,51 +174,37 @@ export default function AiConfig() {
       return;
     }
     setSandboxLoading(true);
-    setSandboxOutput('⏳ CENNA AI Sedang menganalisis transcript kasus medis...\n\n');
+    const activeProviderId = localStorage.getItem('AI_PROVIDER') || 'anthropic';
+    const activeProviderDef = AI_PROVIDERS.find(p => p.id === activeProviderId) || AI_PROVIDERS[0];
+    setSandboxOutput(`⏳ CENNA AI menganalisis dengan ${activeProviderDef.icon} ${activeProviderDef.name}...\n\n`);
 
     try {
-      const apiKey = localStorage.getItem('ANTHROPIC_API_KEY');
-      if (!apiKey) {
-        // Simulated local fallback if keys are missing
-        await new Promise((r) => setTimeout(r, 1800));
+      const systemPrompt = 'Kamu adalah CENNA AI asisten klinis medis berbasis AI. Analisis setiap kasus dengan metodologi evidence-based medicine, gunakan terminologi medis Indonesia (IDI/PAPDI). Selalu sertakan kode ICD-10 yang relevan.';
+      const actionPrompt = sandboxMode === 'soap'
+        ? 'Buatkan resume SOAP Note klinis detail dan komprehensif'
+        : sandboxMode === 'ddx'
+        ? 'Analisis differential diagnosis lengkap dengan probabilitas dalam format JSON array'
+        : 'Analisis dan deteksi Red Flag bahaya klinis kritis dari teks ini dalam format JSON';
+
+      const result = await callActiveAI(systemPrompt, `${actionPrompt} dari teks kasus berikut:\n\n${sandboxInput}`);
+      setSandboxOutput(`[${activeProviderDef.icon} ${activeProviderDef.name} — ${localStorage.getItem('AI_MODEL') || activeProviderDef.defaultModel}]\n${'─'.repeat(55)}\n\n${result}`);
+      addLocalLog('success', 'AI', `Sandbox test berhasil via ${activeProviderDef.name}.`);
+    } catch (e: any) {
+      // Fallback simulasi jika provider belum dikonfigurasi
+      if (e.message?.includes('belum dikonfigurasi') || e.message?.includes('API Key')) {
+        await new Promise(r => setTimeout(r, 1200));
         let mockRes = '';
         if (sandboxMode === 'soap') {
-          mockRes = `=========================================================\nCENNA GENERATED SOAP NOTE (Simulated Review)\n=========================================================\n\n[SUBJECTIVE]\n- Keluhan Utama: Terdeteksi dari skenario transcript yang Anda pilih.\n- Onset/Riwayat: Berlangsung dalam durasi terlampir.\n- Gejala Penyerta: Mual, penurunan nasfu makan, demam ringan terdata.\n\n[OBJECTIVE]\n- Kesadaran: Compos Mentis (CM)\n- Suhu Badan: Terpantau febris / subfebris.\n- Pemeriksaan Fisik: Terpotong sesuai laporan gejala fokal.\n\n[ASSESSMENT]\n- Diagnosa Kerja Utama: Terduga kuat sesuai korelasi keluhan patologi.\n- Diferensial Diagnosis (DDx):\n  1. Probabilitas Utama (75%)\n  2. Probabilitas Sekunder (20%)\n  3. Lainnya (5%)\n\n[PLAN]\n- Tindakan Awal: Observasi tanda bahaya / Red Flag.\n- Terapi Farmasi: Rujuk pada sediaan formularium paten & generik.\n- Edukasi: Minum air putih hangat, hindari aktivitas guncangan berat.\n- Kunjungan Ulang: Kontrol dalam 3 hari jika tidak membaik.\n\n💡 Hubungkan Anthropic API Key di tab "API & Integrasi" untuk review diagnosa real-time bertenaga Claude Sonnet!`;
+          mockRes = `=========================================================\nCENNA GENERATED SOAP NOTE (Simulated — Offline Mode)\n=========================================================\n\n[SUBJECTIVE]\n- Keluhan Utama: Terdeteksi dari skenario transcript.\n- Gejala Penyerta: Mual, demam, penurunan nafsu makan.\n\n[OBJECTIVE]\n- Kesadaran: Compos Mentis (CM)\n\n[ASSESSMENT]\n- DDx: (1) Diagnosis utama 75%, (2) Alternatif 20%, (3) Lainnya 5%\n\n[PLAN]\n- Observasi tanda bahaya / Red Flag\n- Kontrol dalam 3 hari jika tidak membaik\n\n⚙️ Konfigurasi AI Provider di tab "API & Integrasi" untuk analisis real-time!\nProvider tersedia: ${AI_PROVIDERS.map(p => p.icon + ' ' + p.name).join(', ')}`;
         } else if (sandboxMode === 'ddx') {
-          mockRes = `{\n  "differential_diagnoses": [\n    {\n      "code": "ICD-10 Code Relevan",\n      "probability": "75%",\n      "supporting_evidence": "Sesuai anamnesa fokal gejala utama.",\n      "recommended_test": "Pemeriksaan darah rutin / ultrasonografi"\n    }\n  ]\n}`;
+          mockRes = `{\n  "differential_diagnoses": [\n    {\n      "icd10": "J06.9",\n      "diagnosis": "ISPA Non-Spesifik",\n      "probability": "70%",\n      "evidence": "Gejala klinis sesuai pola infeksi saluran napas atas"\n    }\n  ],\n  "note": "⚙️ Konfigurasi API Key untuk analisis DDx real-time"\n}`;
         } else {
-          mockRes = `{\n  "red_flags": ["Tanda nyeri tekan lepas", "Guncangan memperberat perut"],\n  "urgency_level": "high",\n  "recommended_action": "Segera konsul spesialis bedah / rujuk ke unit gawat darurat (UGD)."\n}`;
+          mockRes = `{\n  "red_flags": ["Perlu evaluasi lebih lanjut"],\n  "urgency_level": "medium",\n  "recommended_action": "⚙️ Konfigurasi API Key untuk deteksi Red Flag real-time",\n  "available_providers": [${AI_PROVIDERS.map(p => `"${p.name}"`).join(', ')}]\n}`;
         }
         setSandboxOutput(mockRes);
       } else {
-        // Real Anthropic call
-        const systemPrompt = `Kamu adalah CENNA AI asisten klinis. Analisis kasus medis seilmiah mungkin dengan ICD-10 Indonesia, biasakan evidence-based medicine.`;
-        const actionPrompt = sandboxMode === 'soap' ? 'Buatkan resume SOAP Note klinis detail' : sandboxMode === 'ddx' ? 'Sebutkan differential diagnosis dan probabilitas dalam format JSON array' : 'Analisis tanda Red Flag bahaya fatal dari teks ini dalam format JSON';
-        
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({
-            model: localStorage.getItem('AI_MODEL') || 'claude-haiku-4-5-20251001',
-            max_tokens: 1500,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: `${actionPrompt} dari teks kasus berikut:\n\n${sandboxInput}` }]
-          })
-        });
-
-        const data = await res.json();
-        if (data.content && data.content[0]) {
-          setSandboxOutput(data.content[0].text);
-        } else {
-          setSandboxOutput('Error: ' + JSON.stringify(data.error || data));
-        }
+        setSandboxOutput(`❌ Gagal memuat hasil AI.\nProvider: ${activeProviderDef.name}\nError: ${e.message}`);
       }
-    } catch (e: any) {
-      setSandboxOutput(`Gagal memuat hasil AI. Error: ${e.message}`);
     } finally {
       setSandboxLoading(false);
     }
@@ -614,7 +601,9 @@ export default function AiConfig() {
                 disabled={sandboxLoading}
                 className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none disabled:opacity-50 cursor-pointer shadow-md"
               >
-                {sandboxLoading ? '⏳ AI Sedang Menganalisa...' : '🧪 Jalankan AI Test Sandbox'}
+                {sandboxLoading
+                  ? `⏳ ${AI_PROVIDERS.find(p => p.id === (localStorage.getItem('AI_PROVIDER') || 'anthropic'))?.icon || '🤖'} Menganalisis...`
+                  : `🧪 Jalankan via ${AI_PROVIDERS.find(p => p.id === (localStorage.getItem('AI_PROVIDER') || 'anthropic'))?.name || 'AI'}`}
               </button>
             </div>
 
