@@ -537,9 +537,31 @@ async function speak(text: string, onEnd: () => void): Promise<void> {
   await tryProviders([preferredProvider, ...fallbackOrder, 'browser']);
 }
 
+// ─── Global mic-track registry ───────────────────────────────────────────────
+// Setiap track yang diperoleh lewat getUserMedia didaftarkan di sini.
+// emergencyStopAllMic() memanggil stop() pada semua track — melepas mic di browser.
+const _globalMicTracks = new Set<MediaStreamTrack>();
+
+/** Hentikan SEMUA track mikrofon secara paksa (dipanggil saat masuk admin dashboard) */
+export function emergencyStopAllMic(): void {
+  _globalMicTracks.forEach(track => {
+    try { track.stop(); } catch { /* ignore */ }
+  });
+  _globalMicTracks.clear();
+  // Juga hentikan SpeechRecognition global jika ada
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SR && window.speechSynthesis) window.speechSynthesis.cancel();
+  } catch { /* ignore */ }
+  console.log('[Cenna] emergencyStopAllMic — semua mic track dihentikan');
+}
+
+
 function useWakeWord(onDetected: () => void, active: boolean) {
   const recRef        = useRef<SpeechRecognition | null>(null);
   const timerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const runningRef    = useRef(false);
   const activeRef     = useRef(active);
   const onDetectedRef = useRef(onDetected);
@@ -557,9 +579,12 @@ function useWakeWord(onDetected: () => void, active: boolean) {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
-    // FIX: Hentikan semua track MediaStream agar ikon mic di browser benar-benar off
+    // Stop semua track dan hapus dari registry global
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        try { track.stop(); } catch { /* ignore */ }
+        _globalMicTracks.delete(track);          // ← hapus dari registry
+      });
       streamRef.current = null;
       console.log('[Cenna wake] MediaStream tracks stopped — mic released');
     }
@@ -645,10 +670,19 @@ function useWakeWord(onDetected: () => void, active: boolean) {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
-    // Minta mic permission di sini — hook mengelola sendiri
+    // ⚠️ FIX RACE CONDITION: tandai jika cleanup sudah dipanggil sebelum getUserMedia resolve
+    let cleanupCalled = false;
+
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream) => {
-        // FIX: Simpan stream agar bisa dilepas saat unmount
+        if (cleanupCalled) {
+          // Komponen unmount SEBELUM mic resolve — langsung stop stream
+          stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ok */ } });
+          console.log('[Cenna wake] mic granted AFTER unmount — race condition fixed, tracks stopped');
+          return;
+        }
+        // Daftarkan semua track ke registry global
+        stream.getTracks().forEach(t => _globalMicTracks.add(t));
         streamRef.current = stream;
         console.log('[Cenna wake] mic granted, starting wake listener');
         start();
@@ -657,8 +691,10 @@ function useWakeWord(onDetected: () => void, active: boolean) {
         console.warn('[Cenna wake] mic denied:', err);
       });
 
-    // Cleanup saat LandingPage unmount (misal: pindah ke halaman admin)
-    return () => stop();
+    return () => {
+      cleanupCalled = true; // Set flag SEBELUM stop() agar race condition terdeteksi
+      stop();
+    };
   }, [active, start, stop]);
 }
 
@@ -675,8 +711,8 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   const runningRef      = useRef(false);
   const transcriptRef   = useRef('');
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Catatan: ambient listener tidak memanggil getUserMedia sendiri.
-  // SpeechRecognition.abort() sudah cukup melepas mic secara internal.
+  // Ambient listener juga request getUserMedia sendiri agar track bisa di-stop paksa
+  const ambientStreamRef = useRef<MediaStream | null>(null);
 
   // Synchronous ref update
   const enabledRef = useRef(enabled);
@@ -704,10 +740,17 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   const stop = useCallback(() => {
     runningRef.current = false;
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-    // abort() menghentikan SpeechRecognition dan melepas mic secara internal
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
-    console.log('[Cenna ambient] stopped — mic released via SpeechRecognition.abort()');
+    // Hentikan MediaStream ambient dan hapus dari registry global
+    if (ambientStreamRef.current) {
+      ambientStreamRef.current.getTracks().forEach(t => {
+        try { t.stop(); } catch { /* ignore */ }
+        _globalMicTracks.delete(t);
+      });
+      ambientStreamRef.current = null;
+    }
+    console.log('[Cenna ambient] stopped — mic released');
   }, []);
 
   stopRef.current = stop;
@@ -765,9 +808,25 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
-    if (enabled) { start(); } else { stop(); }
-    // Cleanup saat LandingPage unmount (misal: pindah ke halaman admin)
-    return () => stop();
+    if (!enabled) { stop(); return () => stop(); }
+
+    let cleanupCalled = false;
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        if (cleanupCalled) {
+          stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ok */ } });
+          return;
+        }
+        stream.getTracks().forEach(t => _globalMicTracks.add(t));
+        ambientStreamRef.current = stream;
+        start();
+      })
+      .catch(() => {
+        // Fallback: mulai tanpa stream tracking (SpeechRecognition kelola mic sendiri)
+        if (!cleanupCalled) start();
+      });
+
+    return () => { cleanupCalled = true; stop(); };
   }, [enabled, start, stop]);
 }
 

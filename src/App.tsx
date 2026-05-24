@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import LandingPage from './components/LandingPage';
+import LandingPage, { emergencyStopAllMic } from './components/LandingPage';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import AiConfig from './components/AiConfig';
@@ -57,6 +57,14 @@ export default function App() {
     }
     boot();
   }, []);
+
+  // ⚠️ Lapisan keamanan akhir: force-stop semua mic track saat keluar dari landing page
+  // Menangani race condition getUserMedia yang resolve setelah React cleanup
+  useEffect(() => {
+    if (page !== 'landing') {
+      emergencyStopAllMic();
+    }
+  }, [page]);
 
   async function loadAllData() {
     const lg = await sbGetLogs();
