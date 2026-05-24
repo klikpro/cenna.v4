@@ -73,6 +73,9 @@ function useWakeWord(onDetected: () => void, enabled: boolean) {
             return;
           }
         }
+        // diagnostic logging
+        const alts = Array.from({ length: r.length }, (_, j) => r[j].transcript);
+        console.log('[Hai Cenna debug]', { final: r.isFinal, alts });
       }
     };
 
@@ -99,30 +102,6 @@ function useWakeWord(onDetected: () => void, enabled: boolean) {
   }, [enabled, start, stop]);
 }
 
-// ─── Diagnostic logger ────────────────────────────────────────────────────
-function useTranscriptLogger(enabled: boolean) {
-  useEffect(() => {
-    if (!enabled) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-    const rec: SpeechRecognition = new SR();
-    rec.lang = 'id-ID'; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 5;
-    let active = true;
-    const restart = () => { if (!active) return; try { rec.start(); } catch { setTimeout(restart, 400); } };
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        const alts = Array.from({ length: r.length }, (_, j) => r[j].transcript);
-        console.log('[Hai Cenna debug]', { final: r.isFinal, alts });
-      }
-    };
-    rec.onerror = (e: SpeechRecognitionErrorEvent) => console.warn('[Hai Cenna debug] error:', e.error);
-    rec.onend = restart;
-    restart();
-    return () => { active = false; try { rec.abort(); } catch { /* ignore */ } };
-  }, [enabled]);
-}
 
 // ─── Component ─────────────────────────────────────────────────────────────
 export default function LandingPage({ onLoginClick }: LandingPageProps) {
@@ -159,7 +138,6 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   }, []);
 
   useWakeWord(handleWakeWord, wakeEnabled);
-  useTranscriptLogger(wakeEnabled);
 
   const handleOrbClick = () => {
     setOrbState((prev) =>
