@@ -29,7 +29,7 @@ Pasien: Tidak dok, masih terasa mencengkram dan sangat sesak.`,
 };
 
 export default function AiConfig() {
-  const [activeTab, setActiveTab] = useState<'behavior' | 'prompts' | 'reasoning' | 'sandbox'>('behavior');
+  const [activeTab, setActiveTab] = useState<'behavior' | 'prompts' | 'anamnesis' | 'reasoning' | 'sandbox'>('behavior');
 
   // 1. Behavior State
   const [profile, setProfile] = useState<'specialist' | 'gp' | 'emergency' | 'pediatric'>('gp');
@@ -43,6 +43,7 @@ export default function AiConfig() {
   const [aiLang, setAiLang] = useState('id-medical');
 
   // 2. Prompts State
+  const [promptAnamnesis, setPromptAnamnesis] = useState('');
   const [promptCore, setPromptCore] = useState('');
   const [promptSoap, setPromptSoap] = useState('');
   const [promptRedflag, setPromptRedflag] = useState('');
@@ -60,6 +61,72 @@ export default function AiConfig() {
   const [sandboxOutput, setSandboxOutput] = useState('');
   const [sandboxLoading, setSandboxLoading] = useState(false);
 
+  const DEFAULT_PROMPT_ANAMNESIS = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
+
+Tugasmu adalah menggali anamnesis secara sistematis mengikuti kerangka PQRST, Riwayat Penyakit Dahulu (RPD), Riwayat Penyakit Keluarga (RPK), Riwayat Pribadi & Sosial (RPS), dan Pemeriksaan Fisik (jika tersedia).
+
+== KERANGKA PQRST ==
+- P (Provokasi/Paliatif): Apa yang memperberat atau meringankan keluhan?
+- Q (Kualitas): Bagaimana sifat / karakter keluhannya? (nyeri tumpul, tajam, seperti ditusuk, terbakar, dll)
+- R (Radiasi/Regio): Di mana lokasi keluhannya? Apakah menjalar ke tempat lain?
+- S (Skala/Severitas): Berapa skala keluhannya dari 0-10? Atau seberapa mengganggu aktivitas?
+- T (Time/Waktu): Kapan mulai? Sudah berapa lama? Terus-menerus atau hilang-timbul?
+
+== RIWAYAT ==
+- RPD (Riwayat Penyakit Dahulu): Pernah sakit serupa sebelumnya? Penyakit kronis? Operasi? Rawat inap?
+- RPK (Riwayat Penyakit Keluarga): Ada anggota keluarga dengan penyakit serupa atau penyakit herediter?
+- RPS (Riwayat Pribadi & Sosial): Merokok? Alkohol? Pekerjaan? Aktivitas fisik? Status perkawinan? Alergi obat?
+
+== PEMERIKSAAN FISIK ==
+- Jika dokter menyebutkan hasil pemeriksaan fisik (tekanan darah, nadi, suhu, auskultasi, palpasi, dll), catat dan integrasikan ke dalam penilaian klinis.
+
+== ATURAN PERCAKAPAN ==
+- JANGAN bertanya semua sekaligus — ajukan 1-2 pertanyaan spesifik per giliran, prioritaskan yang paling relevan secara klinis
+- Gunakan bahasa Indonesia yang hangat dan profesional seperti dokter yang berbicara langsung kepada pasien atau sejawat
+- Saat keluhan sudah cukup tergali (minimal PQRST + 1 riwayat), sertakan field \"phase\": \"complete\" dan berikan kesimpulan klinis lengkap
+- Selalu identifikasi RED FLAG yang memerlukan tindakan segera
+- Gunakan terminologi medis Indonesia baku (IDI/PAPDI/WHO)
+
+== FORMAT OUTPUT WAJIB JSON ==
+{
+  \"voice_response\": \"<1-3 kalimat yang akan diucapkan TTS — pertanyaan anamnesis berikutnya atau konfirmasi>\",
+  \"anamnesis\": {
+    \"provokasi\": \"<info atau kosong jika belum digali>\",
+    \"kualitas\": \"\",
+    \"radiasi\": \"\",
+    \"skala\": \"\",
+    \"waktu\": \"\",
+    \"rpd\": \"\",
+    \"rpk\": \"\",
+    \"rps\": \"\",
+    \"pemfis\": \"\"
+  },
+  \"missing_fields\": [\"<field yang belum tergali>\"],
+  \"phase\": \"gathering\",
+  \"keluhan\": [],
+  \"obat\": [],
+  \"pertanyaan\": [],
+  \"red_flags\": [],
+  \"conclusion\": null,
+  \"session_end\": false
+}
+
+Saat phase \"complete\", isi field \"conclusion\" dengan:
+{
+  \"diagnosis_utama\": \"\",
+  \"icd10_code\": \"\",
+  \"diagnosis_banding\": [
+    { \"diagnosis\": \"\", \"icd10\": \"\", \"probabilitas\": \"\", \"alasan\": \"\" }
+  ],
+  \"tatalaksana\": [
+    { \"kategori\": \"farmakologi\", \"detail\": \"\" },
+    { \"kategori\": \"non-farmakologi\", \"detail\": \"\" }
+  ],
+  \"edukasi\": [],
+  \"red_flags\": [],
+  \"prognosis\": \"\"
+}`;
+
   const DEFAULT_PROMPT_CORE = `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu {{doctor_name}} ({{specialization}}) di {{clinic_name}}.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`;
   const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`;
   const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
@@ -69,6 +136,9 @@ export default function AiConfig() {
   useEffect(() => {
     async function loadSettings() {
       // --- Prompts: dari Supabase ---
+      const dbAnamnesis = await sbGetSetting<string>('prompt_anamnesis');
+      setPromptAnamnesis(dbAnamnesis || DEFAULT_PROMPT_ANAMNESIS);
+
       const dbCore = await sbGetSetting<string>('prompt_core');
       setPromptCore(dbCore || DEFAULT_PROMPT_CORE);
 
@@ -121,6 +191,18 @@ export default function AiConfig() {
     await sbSetSetting('ai_behavior', payload);
     addLocalLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
     alert('Konfigurasi perilaku klinis berhasil disimpan ke database!');
+  };
+
+  const handleSaveAnamnesis = async () => {
+    await sbSetSetting('prompt_anamnesis', promptAnamnesis);
+    addLocalLog('success', 'SYSTEM', 'Prompt Anamnesis PQRST AI diperbarui.');
+    alert('Prompt Anamnesis PQRST berhasil disimpan ke database!');
+  };
+
+  const handleResetAnamnesis = () => {
+    if (confirm('Reset prompt anamnesis ke default bawaan sistem?')) {
+      setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS);
+    }
   };
 
   const handleSavePrompts = async () => {
@@ -214,6 +296,15 @@ export default function AiConfig() {
           }`}
         >
           🧠 Perilaku Klinis
+        </button>
+        <button
+          id="btn-tab-ai-anamnesis"
+          onClick={() => setActiveTab('anamnesis')}
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition border-none cursor-pointer ${
+            activeTab === 'anamnesis' ? 'bg-white text-[#1e2a4a] shadow-sm' : 'text-[#1e2a4a]/50 bg-transparent'
+          }`}
+        >
+          🩺 Prompt Anamnesis
         </button>
         <button
           id="btn-tab-ai-prompts"
@@ -371,6 +462,102 @@ export default function AiConfig() {
               className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
             >
               💾 Simpan Perilaku Klinis
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'anamnesis' && (
+        <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="font-bold text-sm text-[#1e2a4a] mb-1">🩺 Prompt Anamnesis AI — Pola Pikir Dokter Spesialis</h3>
+              <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
+                Prompt ini mengendalikan cara CENNA menggali anamnesis di halaman depan (Landing Page).
+                Menggunakan kerangka <strong>PQRST</strong>, <strong>RPD</strong>, <strong>RPK</strong>, <strong>RPS</strong>, dan <strong>Pemeriksaan Fisik</strong>.
+                Setelah data terkumpul, CENNA akan langsung menjabarkan <strong>diagnosa, DDx, tatalaksana, dan edukasi</strong>.
+              </p>
+            </div>
+            <button
+              onClick={handleResetAnamnesis}
+              className="ml-4 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-orange-50 whitespace-nowrap"
+            >
+              ↺ Reset Default
+            </button>
+          </div>
+
+          {/* Info cards PQRST */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {[
+              { key: 'P', label: 'Provokasi', desc: 'Pemberat / peringan' },
+              { key: 'Q', label: 'Kualitas', desc: 'Karakter keluhan' },
+              { key: 'R', label: 'Radiasi', desc: 'Lokasi & penjalaran' },
+              { key: 'S', label: 'Skala', desc: 'Intensitas 0-10' },
+              { key: 'T', label: 'Time', desc: 'Onset & durasi' },
+            ].map(item => (
+              <div key={item.key} className="bg-[#1e2a4a]/5 rounded-xl p-2.5 text-center">
+                <span className="text-lg font-black text-[#1e2a4a]">{item.key}</span>
+                <p className="text-[10px] font-bold text-[#1e2a4a] mt-0.5">{item.label}</p>
+                <p className="text-[9px] text-slate-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            {[
+              { key: 'RPD', label: 'Riwayat Penyakit Dahulu', desc: 'Sakit sebelumnya, operasi, rawat inap' },
+              { key: 'RPK', label: 'Riwayat Penyakit Keluarga', desc: 'Penyakit herediter, keluarga dekat' },
+              { key: 'RPS', label: 'Riwayat Pribadi & Sosial', desc: 'Rokok, alkohol, pekerjaan, alergi' },
+            ].map(item => (
+              <div key={item.key} className="bg-blue-50 rounded-xl p-2.5">
+                <span className="text-xs font-black text-blue-700">{item.key}</span>
+                <p className="text-[10px] font-bold text-blue-700 mt-0.5">{item.label}</p>
+                <p className="text-[9px] text-slate-400 leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+              System Prompt Anamnesis (disimpan ke database — digunakan oleh CENNA di Landing Page)
+            </label>
+            <p className="text-[10px] text-slate-400 mb-2">
+              Edit dengan hati-hati. Pastikan format output JSON tetap konsisten agar parsing tidak rusak.
+            </p>
+            <textarea
+              id="prompt-anamnesis-textarea"
+              rows={20}
+              value={promptAnamnesis}
+              onChange={(e) => setPromptAnamnesis(e.target.value)}
+              className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono leading-relaxed outline-none focus:border-[#3d5494] border border-[#1e2a4a]/12 resize-vertical"
+            />
+          </div>
+
+          {/* Output fields yang dihasilkan */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-2">
+            <h4 className="text-xs font-bold text-emerald-800">📋 Output yang dihasilkan CENNA (disimpan ke database tiap sesi)</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px]">
+              {[
+                '✅ Diagnosa Utama + ICD-10',
+                '✅ Diagnosis Banding (DDx)',
+                '✅ Tatalaksana Farmakologi',
+                '✅ Tatalaksana Non-Farmakologi',
+                '✅ Edukasi Pasien',
+                '✅ Red Flags Terdeteksi',
+                '✅ Riwayat PQRST Terstruktur',
+                '✅ Prognosis Singkat',
+              ].map(item => (
+                <span key={item} className="text-emerald-700 font-medium">{item}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-gray-100 flex gap-3">
+            <button
+              id="btn-save-anamnesis-prompt"
+              onClick={handleSaveAnamnesis}
+              className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+            >
+              💾 Simpan Prompt Anamnesis ke Database
             </button>
           </div>
         </div>

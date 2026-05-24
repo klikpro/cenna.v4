@@ -116,3 +116,55 @@ export interface ReasoningConfig {
   evidenceLevel: string;
   rules: string;
 }
+
+/** Hasil anamnesis terstruktur PQRST yang digali CENNA dari percakapan */
+export interface AnamnesisData {
+  // PQRST
+  provokasi: string;        // Faktor yang memperberat / meringankan keluhan
+  kualitas: string;         // Sifat / karakter keluhan (nyeri tumpul, tajam, dll)
+  radiasi: string;          // Penyebaran / lokasi keluhan
+  skala: string;            // Skala intensitas (0-10 atau deskriptif)
+  waktu: string;            // Onset, durasi, frekuensi, pola
+  // Riwayat
+  rpd: string;              // Riwayat Penyakit Dahulu
+  rpk: string;              // Riwayat Penyakit Keluarga
+  rps: string;              // Riwayat Pribadi & Sosial (rokok, alkohol, pekerjaan, dll)
+  // Pemeriksaan
+  pemfis: string;           // Hasil Pemeriksaan Fisik (jika tersedia)
+  // Status pengisian
+  phase: 'gathering' | 'complete';
+  missing_fields: string[]; // Field yang belum tergali
+}
+
+/** Sesi anamnesis lengkap yang disimpan ke database */
+export interface CennaSession {
+  id: string;
+  created_at: string;
+  doctor_name?: string;
+  anamnesis: AnamnesisData;
+  conclusion: ClinicalConclusion | null;
+  red_flags: string[];
+  transcript_full: string;
+  keluhan: string[];
+  obat: string[];
+  session_rounds: number;
+}
+
+/** Kesimpulan klinis yang dihasilkan CENNA setelah anamnesis lengkap */
+export interface ClinicalConclusion {
+  diagnosis_utama: string;
+  icd10_code: string;
+  diagnosis_banding: Array<{
+    diagnosis: string;
+    icd10: string;
+    probabilitas: string;
+    alasan: string;
+  }>;
+  tatalaksana: Array<{
+    kategori: 'farmakologi' | 'non-farmakologi' | 'rujukan' | 'pemeriksaan penunjang';
+    detail: string;
+  }>;
+  edukasi: string[];
+  red_flags: string[];
+  prognosis: string;
+}

@@ -15,8 +15,9 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { sbGetSetting } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbSaveSession } from '../lib/supabase';
 import { callActiveAI } from './ApiSettings';
+import type { AnamnesisData, ClinicalConclusion } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ interface CapturedData {
   obat:       string[];
   pertanyaan: string[];
   waktu:      string;
+  anamnesis?: AnamnesisData;
+  conclusion?: ClinicalConclusion | null;
 }
 
 // ─── Palet ───────────────────────────────────────────────────────────────────
@@ -121,90 +124,120 @@ function matchesClosingWord(raw: string): boolean {
   return CLOSING_PATTERNS.some(p => t.includes(p));
 }
 
-// ─── AI Voice Assistant: system prompt + structured output ───────────────────
+// ─── AI Voice Assistant: PQRST-based anamnesis system ─────────────────────────
+// Prompt fallback (dipakai jika database belum dikonfigurasi)
+const CENNA_ANAMNESIS_FALLBACK = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
 
-const CENNA_VOICE_SYSTEM_PROMPT = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia yang membantu dokter saat konsultasi berjalan.
+Gaya kerja:
+- JANGAN memperkenalkan diri atau menjelaskan cara kerja — langsung masuk ke penggalian anamnesis
+- Tanya 1-2 pertanyaan klinis yang paling relevan per giliran, berurutan dari PQRST → RPD → RPK → RPS → Pemfis
+- Gunakan bahasa hangat dan profesional seperti dokter spesialis berbicara langsung kepada pasien
+- Saat data PQRST lengkap dan minimal 1 riwayat tergali, LANGSUNG berikan kesimpulan klinis (diagnosa, DDx, tatalaksana, edukasi)
+- Identifikasi RED FLAG proaktif
 
-Tugas utama:
-1. Dengarkan transkrip percakapan dokter-pasien.
-2. Berikan RESPONS SUARA yang natural, singkat (1-3 kalimat), empatik, dan relevan secara klinis.
-3. Sekaligus, ekstrak data medis terstruktur dari percakapan tersebut.
-4. Deteksi apakah percakapan mengandung sinyal penutup sesi (dokter pamit, "terima kasih", "selesai", dsb).
+Output WAJIB JSON (tidak ada teks di luar JSON):
+{"voice_response":"","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":[],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
 
-Aturan respons suara:
-- Jawab dalam Bahasa Indonesia yang natural dan hangat.
-- Maksimal 2-3 kalimat — ini akan diucapkan via TTS.
-- Jika ada keluhan, akui dan beri catatan relevan singkat.
-- Jika ada pertanyaan dokter kepada pasien, bantu konfirmasi atau beri konteks.
-- Jika tidak ada konteks klinis jelas, cukup konfirmasi bahwa data tercatat.
-- JANGAN menyebut nama obat spesifik tanpa konteks yang jelas.
-- JANGAN beri diagnosis — hanya bantu catat dan identifikasi.
-- Jika session_end true, tutup dengan kalimat pamit yang hangat.
+Saat phase "complete", isi conclusion:
+{"diagnosis_utama":"","icd10_code":"","diagnosis_banding":[{"diagnosis":"","icd10":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
 
-Format output WAJIB JSON (tidak ada teks di luar JSON):
-{
-  "voice_response": "<teks yang akan diucapkan TTS, 1-3 kalimat>",
-  "keluhan": ["<keluhan 1>", "<keluhan 2>"],
-  "obat": ["<obat/terapi 1>"],
-  "pertanyaan": ["<pertanyaan klinis yang terdeteksi>"],
-  "ringkasan": "<ringkasan 1 kalimat>",
-  "session_end": false
-}`;
+// Cache prompt dari DB
+let _cachedAnamnesisPrompt: string | null = null;
+async function getAnamnesisPrompt(): Promise<string> {
+  if (_cachedAnamnesisPrompt) return _cachedAnamnesisPrompt;
+  const db = await sbGetSetting<string>('prompt_anamnesis');
+  _cachedAnamnesisPrompt = db || CENNA_ANAMNESIS_FALLBACK;
+  return _cachedAnamnesisPrompt;
+}
+
+// State akumulasi anamnesis lintas ronde dalam satu sesi
+let _currentAnamnesis: AnamnesisData = {
+  provokasi: '', kualitas: '', radiasi: '', skala: '', waktu: '',
+  rpd: '', rpk: '', rps: '', pemfis: '',
+  phase: 'gathering', missing_fields: [],
+};
+
+function mergeAnamnesis(prev: AnamnesisData, next: Partial<AnamnesisData>): AnamnesisData {
+  return {
+    provokasi: next.provokasi || prev.provokasi,
+    kualitas:  next.kualitas  || prev.kualitas,
+    radiasi:   next.radiasi   || prev.radiasi,
+    skala:     next.skala     || prev.skala,
+    waktu:     next.waktu     || prev.waktu,
+    rpd:       next.rpd       || prev.rpd,
+    rpk:       next.rpk       || prev.rpk,
+    rps:       next.rps       || prev.rps,
+    pemfis:    next.pemfis    || prev.pemfis,
+    phase:     next.phase     || prev.phase,
+    missing_fields: next.missing_fields ?? prev.missing_fields,
+  };
+}
+
+function resetAnamnesisState() {
+  _currentAnamnesis = {
+    provokasi: '', kualitas: '', radiasi: '', skala: '', waktu: '',
+    rpd: '', rpk: '', rps: '', pemfis: '',
+    phase: 'gathering', missing_fields: [],
+  };
+  _cachedAnamnesisPrompt = null;
+}
 
 async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
   voice_response: string;
   keluhan: string[];
   obat: string[];
   pertanyaan: string[];
-  ringkasan: string;
+  red_flags: string[];
+  anamnesis: AnamnesisData;
+  conclusion: ClinicalConclusion | null;
   session_end: boolean;
 }> {
-  // Susun konteks ronde sebelumnya sebagai bagian dari prompt
+  const systemPrompt = await getAnamnesisPrompt();
+  const anamnesisCtx = JSON.stringify(_currentAnamnesis, null, 2);
   const historyContext = history.length > 0
-    ? '\n\nKonteks percakapan sebelumnya dalam sesi ini:\n' +
-      history.map((h, i) => `[${h.role === 'user' ? 'Dokter/Pasien' : 'Cenna'}]: ${h.content}`).join('\n')
+    ? '\n\nKonteks percakapan sebelumnya:\n' +
+      history.map(h => `[${h.role === 'user' ? 'Dokter/Pasien' : 'CENNA'}]: ${h.content}`).join('\n')
     : '';
 
   const raw = await callActiveAI(
-    CENNA_VOICE_SYSTEM_PROMPT,
-    `Transkrip percakapan terbaru:${historyContext}
-
-[Transkrip baru — Ronde ${Math.ceil((history.length + 1) / 2)}]:
-"${transcript}"
-
-Berikan respons JSON sesuai format.`
+    systemPrompt,
+    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru — Ronde ${Math.ceil((history.length + 1) / 2)}]:\n"${transcript}"\n\nLanjutkan penggalian anamnesis atau berikan kesimpulan klinis jika sudah cukup.`
   );
 
-  // Parse JSON — strip markdown fences dan karakter kontrol jika ada
   const cleaned = raw
     .replace(/```json|```/gi, '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ') // strip control chars yang bisa break JSON.parse
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .trim();
-
-  // Ekstrak blok JSON dari dalam string jika ada teks sebelum/sesudah
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+
   try {
     const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
-    // Pastikan semua field ada dan bertipe benar
+    if (parsed.anamnesis) {
+      _currentAnamnesis = mergeAnamnesis(_currentAnamnesis, parsed.anamnesis);
+    }
+    if (parsed.phase === 'complete') _currentAnamnesis.phase = 'complete';
+
+    const isComplete = parsed.phase === 'complete' || parsed.session_end === true || matchesClosingWord(transcript);
+
     return {
       voice_response: typeof parsed.voice_response === 'string' && parsed.voice_response.trim()
         ? parsed.voice_response.trim()
-        : 'Data percakapan sudah dicatat, dokter.',
+        : 'Data sudah dicatat, dokter.',
       keluhan:    Array.isArray(parsed.keluhan)    ? parsed.keluhan    : [],
       obat:       Array.isArray(parsed.obat)       ? parsed.obat       : [],
       pertanyaan: Array.isArray(parsed.pertanyaan) ? parsed.pertanyaan : [],
-      ringkasan:  typeof parsed.ringkasan === 'string' ? parsed.ringkasan : transcript.slice(0, 80),
-      session_end: parsed.session_end === true || matchesClosingWord(transcript),
+      red_flags:  Array.isArray(parsed.red_flags)  ? parsed.red_flags  : [],
+      anamnesis:  { ..._currentAnamnesis },
+      conclusion: parsed.conclusion ?? null,
+      session_end: isComplete,
     };
   } catch {
-    // Fallback jika parsing gagal total
     console.warn('[Cenna AI] JSON parse failed, raw:', cleaned.slice(0, 200));
     return {
       voice_response: 'Data percakapan sudah dicatat, dokter.',
-      keluhan: [],
-      obat: [],
-      pertanyaan: [],
-      ringkasan: transcript.slice(0, 80),
+      keluhan: [], obat: [], pertanyaan: [], red_flags: [],
+      anamnesis: { ..._currentAnamnesis },
+      conclusion: null,
       session_end: matchesClosingWord(transcript),
     };
   }
@@ -753,7 +786,143 @@ function StatusPill({ phase, aiLabel }: { phase: OrbPhase; aiLabel: string }) {
   );
 }
 
-// ─── DataPopup ────────────────────────────────────────────────────────────────
+// ─── ConclusionPopup — Diagnosa, DDx, Tatalaksana, Edukasi ─────────────────
+
+interface ConclusionPopupProps {
+  conclusion: ClinicalConclusion;
+  anamnesis: AnamnesisData;
+  redFlags: string[];
+  onClose: () => void;
+  onSOAP: () => void;
+}
+
+function ConclusionPopup({ conclusion, anamnesis, redFlags, onClose, onSOAP }: ConclusionPopupProps) {
+  const [tab, setTab] = React.useState<'diagnosa' | 'anamnesis' | 'tatalaksana' | 'edukasi'>('diagnosa');
+  const katColor: Record<string, string> = {
+    farmakologi: '#1e2a4a', 'non-farmakologi': '#10b981',
+    rujukan: '#e74c3c', 'pemeriksaan penunjang': '#7F77DD',
+  };
+  const TABS = [
+    { key: 'diagnosa',   label: '📋 DDx' },
+    { key: 'anamnesis',  label: '🩺 Anamnesis' },
+    { key: 'tatalaksana', label: '💊 Tatalaksana' },
+    { key: 'edukasi',   label: '📖 Edukasi' },
+  ] as const;
+  const pqrsRows = [
+    { key: 'P — Provokasi', val: anamnesis.provokasi },
+    { key: 'Q — Kualitas',  val: anamnesis.kualitas  },
+    { key: 'R — Radiasi',   val: anamnesis.radiasi   },
+    { key: 'S — Skala',     val: anamnesis.skala     },
+    { key: 'T — Waktu',     val: anamnesis.waktu     },
+    { key: 'RPD',           val: anamnesis.rpd       },
+    { key: 'RPK',           val: anamnesis.rpk       },
+    { key: 'RPS',           val: anamnesis.rps       },
+    { key: 'Pemfis',        val: anamnesis.pemfis    },
+  ];
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(10,15,30,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: '1rem', backdropFilter: 'blur(6px)' }}>
+      <div style={{ background: 'white', borderRadius: 20, width: '100%', maxWidth: 560, maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 40px 80px -16px rgba(30,42,74,0.4)', animation: 'popupIn 0.35s cubic-bezier(0.16,1,0.3,1) forwards' }}>
+        {/* Header */}
+        <div style={{ background: '#1e2a4a', padding: '16px 20px', borderRadius: '20px 20px 0 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#f5f0e8', fontFamily: "'DM Sans',sans-serif" }}>🩺 Kesimpulan Klinis CENNA</p>
+            <p style={{ margin: 0, fontSize: 10, color: 'rgba(245,240,232,0.5)', fontFamily: "'DM Mono',monospace", letterSpacing: '0.1em' }}>Analisis berbasis pola pikir dokter spesialis · PQRST</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(245,240,232,0.5)', cursor: 'pointer', fontSize: 20 }}>✕</button>
+        </div>
+        {/* Red flags */}
+        {redFlags.length > 0 && (
+          <div style={{ background: '#fee2e2', borderBottom: '1px solid #fca5a5', padding: '10px 20px', display: 'flex', gap: 8 }}>
+            <span style={{ fontSize: 16, flexShrink: 0 }}>🚨</span>
+            <div>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#dc2626' }}>RED FLAG — Perlu perhatian segera</p>
+              {redFlags.map((rf, i) => <p key={i} style={{ margin: '2px 0 0', fontSize: 11, color: '#7f1d1d' }}>• {rf}</p>)}
+            </div>
+          </div>
+        )}
+        {/* Diagnosis utama */}
+        <div style={{ padding: '16px 20px 0' }}>
+          <div style={{ background: '#f0f4ff', borderRadius: 12, padding: '12px 16px', borderLeft: '4px solid #1e2a4a' }}>
+            <p style={{ margin: 0, fontSize: 9, color: '#7F77DD', fontFamily: "'DM Mono',monospace", letterSpacing: '0.12em', textTransform: 'uppercase' }}>Diagnosis Utama</p>
+            <p style={{ margin: '4px 0 0', fontSize: 15, fontWeight: 700, color: '#1e2a4a', fontFamily: "'DM Sans',sans-serif" }}>{conclusion.diagnosis_utama || 'Belum dapat ditentukan'}</p>
+            {conclusion.icd10_code && <span style={{ fontSize: 10, background: '#1e2a4a', color: '#f5f0e8', padding: '2px 8px', borderRadius: 4, display: 'inline-block', marginTop: 4, fontFamily: "'DM Mono',monospace" }}>ICD-10: {conclusion.icd10_code}</span>}
+            {conclusion.prognosis && <p style={{ margin: '6px 0 0', fontSize: 11, color: '#64748b', fontStyle: 'italic', lineHeight: 1.5 }}>{conclusion.prognosis}</p>}
+          </div>
+        </div>
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 2, padding: '12px 20px 0', borderBottom: '1px solid #e5e7eb' }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{ padding: '6px 12px', fontSize: 11, fontWeight: 600, border: 'none', cursor: 'pointer', borderRadius: '8px 8px 0 0', background: tab === t.key ? '#1e2a4a' : 'transparent', color: tab === t.key ? '#f5f0e8' : '#94a3b8', fontFamily: "'DM Sans',sans-serif", transition: 'all 0.15s' }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {/* Tab content */}
+        <div style={{ padding: '16px 20px' }}>
+          {tab === 'diagnosa' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {conclusion.diagnosis_banding.length === 0 && <p style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '16px 0' }}>Tidak ada diagnosis banding tercatat.</p>}
+              {conclusion.diagnosis_banding.map((ddx, i) => (
+                <div key={i} style={{ background: i === 0 ? '#f0f9ff' : '#f8fafc', borderRadius: 10, padding: '10px 14px', border: `1px solid ${i === 0 ? '#bae6fd' : '#e2e8f0'}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#1e2a4a', fontFamily: "'DM Sans',sans-serif", flex: 1 }}>{i + 1}. {ddx.diagnosis}</span>
+                    <span style={{ fontSize: 11, background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: 4, fontFamily: "'DM Mono',monospace", fontWeight: 700, whiteSpace: 'nowrap' }}>{ddx.probabilitas}</span>
+                  </div>
+                  {ddx.icd10 && <span style={{ fontSize: 9, background: '#f1f5f9', color: '#64748b', padding: '1px 5px', borderRadius: 3, fontFamily: "'DM Mono',monospace", marginTop: 4, display: 'inline-block' }}>ICD-10: {ddx.icd10}</span>}
+                  {ddx.alasan && <p style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', lineHeight: 1.55 }}>{ddx.alasan}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === 'anamnesis' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {pqrsRows.map(row => (
+                <div key={row.key} style={{ background: row.val ? '#f0fdf4' : '#fafafa', borderRadius: 8, padding: '8px 10px', border: `1px solid ${row.val ? '#bbf7d0' : '#e5e7eb'}` }}>
+                  <p style={{ margin: 0, fontSize: 9, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: "'DM Mono',monospace" }}>{row.key}</p>
+                  <p style={{ margin: '3px 0 0', fontSize: 11, color: row.val ? '#15803d' : '#94a3b8', lineHeight: 1.5, fontFamily: "'DM Sans',sans-serif" }}>{row.val || 'Belum tergali'}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === 'tatalaksana' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {conclusion.tatalaksana.length === 0 && <p style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '16px 0' }}>Tidak ada tatalaksana tercatat.</p>}
+              {conclusion.tatalaksana.map((t, i) => (
+                <div key={i} style={{ background: '#fafafa', borderRadius: 10, padding: '10px 14px', border: '1px solid #e2e8f0', borderLeft: `4px solid ${katColor[t.kategori] || '#b8a898'}` }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: katColor[t.kategori] || '#64748b', fontFamily: "'DM Mono',monospace" }}>{t.kategori}</span>
+                  <p style={{ margin: '4px 0 0', fontSize: 12, color: '#1e293b', lineHeight: 1.65, fontFamily: "'DM Sans',sans-serif" }}>{t.detail}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === 'edukasi' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {conclusion.edukasi.length === 0 && <p style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '16px 0' }}>Tidak ada poin edukasi tercatat.</p>}
+              {conclusion.edukasi.map((e, i) => (
+                <div key={i} style={{ display: 'flex', gap: 10, padding: '10px 14px', background: '#fffbeb', borderRadius: 10, border: '1px solid #fde68a' }}>
+                  <span style={{ fontSize: 16, flexShrink: 0, lineHeight: 1.4 }}>💡</span>
+                  <p style={{ margin: 0, fontSize: 12, color: '#78350f', lineHeight: 1.65, fontFamily: "'DM Sans',sans-serif" }}>{e}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Footer */}
+        <div style={{ padding: '12px 20px 18px', borderTop: '1px solid #f1f5f9', display: 'flex', gap: 8 }}>
+          <button onClick={onSOAP} style={{ flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 600, background: '#1e2a4a', color: '#f5f0e8', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>
+            📝 Lanjut Buat SOAP
+          </button>
+          <button onClick={onClose} style={{ padding: '10px 18px', fontSize: 12, background: 'none', color: '#94a3b8', border: '1px solid #e5e7eb', borderRadius: 10, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>
+            Tutup
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DataPopup (fallback saat AI non-aktif) ────────────────────────────────
 
 interface DataPopupProps { data: CapturedData; onClose: () => void; onSOAP: () => void; canContinue?: boolean; onContinue?: () => void; }
 
@@ -836,12 +1005,13 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [phase,        setPhase]        = useState<OrbPhase>('idle');
   const [wakeFlash,    setWakeFlash]    = useState(false);
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
+  const [conclusionData, setConclusionData] = useState<ClinicalConclusion | null>(null);
+  const [redFlagsData,   setRedFlagsData]   = useState<string[]>([]);
   const [customLogoUrl, setCustomLogoUrl] = useState<string | null>(null);
   const [aiLabel,      setAiLabel]      = useState('Cenna sedang berpikir…');
   const [aiEnabled,    setAiEnabled]    = useState(false);
   const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
   const sessionDataRef = useRef<CapturedData[]>([]);
-
   function mergeSessionData(all: CapturedData[]): CapturedData {
     return {
       transcript: all.map(d => d.transcript).join(' — '),
@@ -935,7 +1105,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       return;
     }
 
-    const currentHistory = conversationHistoryRef.current;
+    const currentHistory = conversationHistoryRef.current!;
     currentHistory.push({ role: 'user', content: data.transcript });
     setPhase('processing');
     setAiLabel('Menganalisis percakapan…');
@@ -958,11 +1128,40 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       setPhase('responding');
 
-      if (aiResult.session_end) {
-        // Kata penutup terdeteksi — ucapkan, lalu tampilkan ringkasan sesi
+      const isSessionEnd = aiResult.session_end || aiResult.conclusion !== null;
+
+      if (isSessionEnd) {
+        // Kesimpulan klinis tersedia — simpan ke DB lalu tampilkan ConclusionPopup
+        const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
+        const allTranscripts = sessionDataRef.current.map(d => d.transcript).join(' — ');
+        const allKeluhan = Array.from(new Set(sessionDataRef.current.flatMap(d => d.keluhan)));
+        const allObat = Array.from(new Set(sessionDataRef.current.flatMap(d => d.obat)));
+
+        // Simpan sesi ke Supabase (non-blocking)
+        sbSaveSession({
+          id: sessionId,
+          created_at: new Date().toISOString(),
+          anamnesis: aiResult.anamnesis,
+          conclusion: aiResult.conclusion,
+          red_flags: aiResult.red_flags,
+          transcript_full: allTranscripts,
+          keluhan: allKeluhan,
+          obat: allObat,
+          session_rounds: Math.ceil(currentHistory.length / 2),
+        }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
+
         speakElevenLabs(aiResult.voice_response, () => {
-          setCapturedData(mergeSessionData(sessionDataRef.current));
-          setPhase('popup'); // popup HANYA di akhir sesi
+          if (aiResult.conclusion) {
+            // Tampilkan ConclusionPopup dengan diagnosa lengkap
+            setConclusionData(aiResult.conclusion);
+            setRedFlagsData(aiResult.red_flags);
+            setCapturedData(mergeSessionData(sessionDataRef.current));
+            setPhase('popup');
+          } else {
+            // Tidak ada conclusion (kata penutup saja) — tampilkan DataPopup biasa
+            setCapturedData(mergeSessionData(sessionDataRef.current));
+            setPhase('popup');
+          }
         });
       } else {
         // Normal — ucapkan, langsung balik listening (handsfree)
@@ -989,8 +1188,11 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleClosePopup = () => {
     setCapturedData(null);
+    setConclusionData(null);
+    setRedFlagsData([]);
     conversationHistoryRef.current = [];
     sessionDataRef.current = [];
+    resetAnamnesisState();
     firedRef.current = false;
     setPhase('idle');
   };
@@ -999,6 +1201,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     conversationHistoryRef.current = [];
     sessionDataRef.current = [];
     setCapturedData(null);
+    setConclusionData(null);
+    setRedFlagsData([]);
+    resetAnamnesisState();
     firedRef.current = false;
     setPhase('idle');
   };
@@ -1007,6 +1212,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     conversationHistoryRef.current = [];
     sessionDataRef.current = [];
     setCapturedData(null);
+    setConclusionData(null);
+    setRedFlagsData([]);
+    resetAnamnesisState();
     onLoginClick();
   };
 
@@ -1062,9 +1270,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
               <p className="text-[11px] tracking-[0.1em] text-[#7F77DD]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>
                 Mendengarkan — jeda 3 detik untuk diproses
               </p>
-              {conversationHistoryRef.current.length > 0 && (
+              {conversationHistoryRef.current!.length > 0 && (
                 <p className="text-[9px] tracking-[0.08em] text-[#7F77DD]/50 mt-1" style={{ fontFamily: "'DM Mono', monospace" }}>
-                  ronde {Math.ceil(conversationHistoryRef.current.length / 2) + 1} / 6
+                  ronde {Math.ceil(conversationHistoryRef.current!.length / 2) + 1} / 6
                 </p>
               )}
             </>
@@ -1095,12 +1303,21 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         )}
       </div>
 
-      {phase === 'popup' && capturedData && (
+      {phase === 'popup' && capturedData && conclusionData && (
+        <ConclusionPopup
+          conclusion={conclusionData}
+          anamnesis={_currentAnamnesis}
+          redFlags={redFlagsData}
+          onClose={handleClosePopup}
+          onSOAP={handleSOAP}
+        />
+      )}
+      {phase === 'popup' && capturedData && !conclusionData && (
         <DataPopup
           data={capturedData}
           onClose={handleClosePopup}
           onSOAP={handleSOAP}
-          canContinue={conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 10}
+          canContinue={conversationHistoryRef.current!.length > 0 && conversationHistoryRef.current!.length < 10}
           onContinue={() => { setCapturedData(null); setPhase('listening'); }}
         />
       )}

@@ -4,7 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Doctor, Drug, IcdCode, AuditLogEntry } from '../types';
+import { Doctor, Drug, IcdCode, AuditLogEntry, CennaSession } from '../types';
 
 // ── Env-var based config (Vite exposes VITE_* at build time) ──────────────────
 const ENV_URL  = import.meta.env.VITE_SUPABASE_URL  as string | undefined;
@@ -401,6 +401,46 @@ export async function sbAddLog(
   }
   const { error } = await client.from('audit_logs').insert(entry);
   if (error) console.error('Log insert error:', error);
+}
+
+// —— CENNA SESSIONS ————————————————————————————————————————————————————————————
+// Tabel: cenna_sessions (id TEXT PK, created_at TIMESTAMPTZ, doctor_name TEXT,
+//   anamnesis JSONB, conclusion JSONB, red_flags JSONB, transcript_full TEXT,
+//   keluhan JSONB, obat JSONB, session_rounds INT)
+
+export async function sbSaveSession(session: CennaSession): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) {
+    // Fallback: simpan ke localStorage jika Supabase tidak tersedia
+    const key = 'CENNA_SESSIONS';
+    const stored: CennaSession[] = JSON.parse(localStorage.getItem(key) || '[]');
+    stored.unshift(session);
+    if (stored.length > 100) stored.pop();
+    localStorage.setItem(key, JSON.stringify(stored));
+    console.info('[sbSaveSession] Saved to localStorage (no Supabase client)');
+    return;
+  }
+  const { error } = await client.from('cenna_sessions').upsert(session, { onConflict: 'id' });
+  if (error) {
+    console.error('[sbSaveSession] Failed:', error.message, error.code);
+    // Jangan throw — gagal simpan tidak boleh crash UX landing page
+  } else {
+    console.info('[sbSaveSession] Session saved:', session.id);
+  }
+}
+
+export async function sbGetSessions(limit = 50): Promise<CennaSession[]> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return JSON.parse(localStorage.getItem('CENNA_SESSIONS') || '[]').slice(0, limit);
+  }
+  const { data, error } = await client
+    .from('cenna_sessions')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) { console.error(error); return []; }
+  return (data ?? []) as CennaSession[];
 }
 
 export async function sbClearLogs(adminName: string): Promise<void> {
