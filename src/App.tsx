@@ -57,13 +57,17 @@ export default function App() {
   useEffect(() => {
     async function boot() {
       const session = await sbGetSession();
-      if (session) {
+      if (session && isAdminRoute()) {
+        // Hanya restore ke dashboard jika URL memang /admin
         setAdminSession(session);
         await loadAllData(session.name);
         setPage('dashboard');
-      } else if (isAdminRoute()) {
-        // /admin URL but no session → show login
+      } else if (!session && isAdminRoute()) {
+        // /admin URL tapi tidak ada sesi → tampilkan login
         setPage('login');
+      } else {
+        // URL bukan /admin (termasuk landing page) → selalu tampilkan landing
+        setPage('landing');
       }
       setLoading(false);
     }
