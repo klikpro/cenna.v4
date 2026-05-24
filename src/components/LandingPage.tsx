@@ -47,12 +47,26 @@ const CENNA_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgAAAAYACAYAAA
 // ─── Wake-word patterns ───────────────────────────────────────────────────────
 
 const WAKE_PATTERNS = [
+  // Variasi 'cenna'
   'hai cenna', 'hei cenna', 'hey cenna', 'hi cenna',
   'hai senna', 'hei senna', 'hey senna', 'hi senna',
   'hai tenna', 'hei tenna', 'hai cena',  'hey cena',
   'hai xena',  'hai zena',  'hai kena',  'hei kena',
-  // fallback fonetik umum lainnya
   'hei sena',  'hai sen na', 'hai ce na', 'hey se na',
+  // Variasi kapitalisasi / spasi yang lolos normalisasi
+  'hai sen a', 'hei sen a', 'hey sen a',
+  'hai chena', 'hei chena', 'hey chena',
+  'hai tsena', 'hai dsena', 'hai nena',
+  // STT sering salah dengar "cenna" sebagai kata lain
+  'hai sana',  'hei sana',  'hey sana',
+  'hai sina',  'hei sina',
+  'hai rena',  'hei rena',
+  'hai dena',  'hei dena',
+  'hai fena',  'hei fena',
+  'hai wena',  'hei wena',
+  // Tanpa spasi (stream interim)
+  'haicenna',  'heicenna',  'hicenna',
+  'haisenna',  'heisenna',
 ];
 
 /**
@@ -73,9 +87,20 @@ function normalizeText(raw: string): string {
 
 function matchesWakeWord(raw: string): boolean {
   const t = normalizeText(raw);
-  const matched = WAKE_PATTERNS.some((p) => t.includes(p));
-  if (matched) console.log('[Cenna wake] ✓ MATCHED on:', JSON.stringify(t));
-  return matched;
+  console.log('[Cenna wake] normalizing:', JSON.stringify(raw), '→', JSON.stringify(t));
+
+  // 1. Exact pattern match
+  if (WAKE_PATTERNS.some((p) => t.includes(p))) {
+    console.log('[Cenna wake] ✓ MATCHED (pattern) on:', JSON.stringify(t));
+    return true;
+  }
+
+  // 2. Fuzzy fallback: "hai/hei/hey/hi" + spasi + 4-7 huruf (nama apapun)
+  //    Menangkap kasus STT menghasilkan kata yang tidak ada di WAKE_PATTERNS
+  const fuzzy = /\b(hai|hei|hey|hi)\s+[a-z]{4,7}\b/.test(t);
+  if (fuzzy) console.log('[Cenna wake] ✓ MATCHED (fuzzy) on:', JSON.stringify(t));
+  else       console.log('[Cenna wake] ✗ no match for:', JSON.stringify(t));
+  return fuzzy;
 }
 
 // ─── Deteksi nada tanya ───────────────────────────────────────────────────────
