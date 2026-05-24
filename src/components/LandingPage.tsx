@@ -576,13 +576,15 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [phase,        setPhase]        = useState<OrbPhase>('idle');
-  const [wakeEnabled,  setWakeEnabled]  = useState(false);
   const [wakeFlash,    setWakeFlash]    = useState(false);
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
 
-  // Simpan phase ke ref agar handleWakeWord tidak stale
+  // phaseRef: selalu sinkron dengan state, dibaca dari closure tanpa stale
   const phaseRef = useRef<OrbPhase>('idle');
   phaseRef.current = phase;
+
+  // firedRef: guard sekali-trigger agar wake word tidak double-fire
+  const firedRef = useRef(false);
 
   const hasSpeechAPI =
     typeof window !== 'undefined' &&
@@ -591,27 +593,25 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   useOrbCanvas(canvasRef, phase);
 
-  // handleWakeWord — baca phase dari REF bukan closure agar tidak stale
+  // handleWakeWord — gunakan firedRef sebagai guard, bukan phaseRef
+  // Alasan: phaseRef saat callback dipanggil mungkin belum 'idle' karena
+  // React belum flush setState dari render sebelumnya.
   const handleWakeWord = useCallback(() => {
-    if (phaseRef.current !== 'idle') {
-      console.log('[Cenna] wake word ignored — phase is', phaseRef.current);
+    // Guard: hanya jalankan sekali sampai fase kembali ke idle
+    if (firedRef.current) {
+      console.log('[Cenna] wake word debounced (already fired)');
       return;
     }
-    console.log('[Cenna] wake word! transitioning idle → speaking');
+    firedRef.current = true;
+    console.log('[Cenna] wake word! → speaking');
 
     setWakeFlash(true);
     setTimeout(() => setWakeFlash(false), 900);
-
     setPhase('speaking');
-    setWakeEnabled(false);
 
-    // Jalankan TTS dengan fallback timeout agar phase tidak stuck di 'speaking'.
-    // Chrome kadang tidak fire onend jika speechSynthesis sedang busy.
     const goListening = () => {
-      if (phaseRef.current === 'speaking') {
-        console.log('[Cenna] → listening');
-        setPhase('listening');
-      }
+      console.log('[Cenna] → listening');
+      setPhase('listening');
     };
 
     setTimeout(() => {
@@ -619,23 +619,25 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         goListening();
         return;
       }
-      // Cancel utterance yang mungkin masih antri
       window.speechSynthesis.cancel();
-
-      const utt = new SpeechSynthesisUtterance('Halo, saya Cenna. Silakan lanjutkan percakapan.');
-      utt.lang  = 'id-ID';
-      utt.rate  = 0.95;
-      utt.onend = () => {
-        console.log('[Cenna] TTS done → listening');
-        goListening();
-      };
-      utt.onerror = () => goListening(); // fallback jika TTS error
+      const utt     = new SpeechSynthesisUtterance('Halo, saya Cenna. Silakan lanjutkan percakapan.');
+      utt.lang      = 'id-ID';
+      utt.rate      = 0.95;
+      utt.onend     = () => { console.log('[Cenna] TTS done → listening'); goListening(); };
+      utt.onerror   = () => goListening();
       window.speechSynthesis.speak(utt);
-
-      // Hard fallback: jika onend tidak fire dalam 5 detik, lanjut paksa
+      // Hard fallback: Chrome kadang tidak fire onend
       setTimeout(goListening, 5000);
     }, 350);
-  }, []); // tidak ada deps — baca dari phaseRef
+  }, []);
+
+  // Reset firedRef ketika phase kembali ke idle (setelah popup/close)
+  useEffect(() => {
+    if (phase === 'idle') {
+      firedRef.current = false;
+      console.log('[Cenna] phase idle — wake guard reset');
+    }
+  }, [phase]);
 
   // Wake-word aktif saat idle — hook mengelola mic permission sendiri
   useWakeWord(handleWakeWord, phase === 'idle');
@@ -653,7 +655,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleClosePopup = () => {
     setCapturedData(null);
-    setPhase('listening');
+    setPhase('idle'); // kembali ke idle agar wake word bisa aktif lagi
   };
 
   const handleSOAP = () => {
@@ -687,7 +689,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       </button>
 
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
-        <OrbCore phase={phase} wakeEnabled={wakeEnabled} wakeFlash={wakeFlash} />
+        <OrbCore phase={phase} wakeEnabled={phase === 'idle'} wakeFlash={wakeFlash} />
         <div className="mt-5" style={{ minHeight: 36 }}>
           {phase === 'idle' && !hasSpeechAPI && (
             <p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>
