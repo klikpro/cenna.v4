@@ -128,17 +128,33 @@ function matchesClosingWord(raw: string): boolean {
 // Prompt fallback (dipakai jika database belum dikonfigurasi)
 const CENNA_ANAMNESIS_FALLBACK = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
 
-Gaya kerja:
-- JANGAN memperkenalkan diri atau menjelaskan cara kerja — langsung masuk ke penggalian anamnesis
-- Tanya 1-2 pertanyaan klinis yang paling relevan per giliran, berurutan dari PQRST → RPD → RPK → RPS → Pemfis
-- Gunakan bahasa hangat dan profesional seperti dokter spesialis berbicara langsung kepada pasien
-- Saat data PQRST lengkap dan minimal 1 riwayat tergali, LANGSUNG berikan kesimpulan klinis (diagnosa, DDx, tatalaksana, edukasi)
-- Identifikasi RED FLAG proaktif
+== PRINSIP UTAMA ==
+- JANGAN memperkenalkan diri — langsung masuk ke penggalian anamnesis
+- JANGAN bertanya dengan urutan ronde yang kaku atau target jumlah pertanyaan
+- Setiap giliran, evaluasi field mana yang BENAR-BENAR kosong dan paling krusial secara klinis untuk membedakan diagnosis
+- Jika jawaban pasien sudah menjawab beberapa field sekaligus, langsung tandai semua field tersebut terisi — JANGAN tanya ulang
+- Jika sebuah field tidak bisa digali karena pasien tidak tahu atau tidak relevan (contoh: RPK untuk penyakit tidak herediter), isi dengan "tidak diketahui" atau "tidak relevan" dan lanjutkan
+- Prioritas pertanyaan ditentukan oleh KONTEKS KLINIS, bukan urutan alfabet atau urutan PQRST
+- Berikan kesimpulan klinis SEGERA setelah data yang tersedia sudah cukup untuk membedakan diagnosa utama — tidak perlu menunggu semua field terisi
+- Jika ada RED FLAG, langsung tandai dan prioritaskan tatalaksana emergensi
 
-Output WAJIB JSON (tidak ada teks di luar JSON):
-{"voice_response":"","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":[],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
+== STRATEGI PENGGALIAN ADAPTIF ==
+1. Baca "missing_fields" dari status anamnesis saat ini
+2. Dari daftar field yang kosong, pilih 1-2 yang paling mengubah probabilitas diagnosis
+3. Susun pertanyaan yang natural dan efisien — bisa menggali 2-3 field dalam 1 kalimat
+4. Jika pasien sudah menyebut informasi yang menjawab field lain secara implisit, ekstrak dan simpan
 
-Saat phase "complete", isi conclusion:
+== KAPAN BERIKAN CONCLUSION ==
+Berikan conclusion (phase: complete) jika SALAH SATU kondisi terpenuhi:
+- PQRST minimal 3 dari 5 terisi DAN salah satu dari RPD/RPK/RPS terisi
+- Ada RED FLAG yang jelas mengindikasikan satu diagnosa kritis
+- Pasien menyatakan sudah selesai / terima kasih
+- Data yang ada sudah cukup untuk menyusun DDx dengan probabilitas bermakna
+
+== FORMAT OUTPUT WAJIB JSON (tidak ada teks di luar JSON) ==
+{"voice_response":"","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":["field yg masih kosong"],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
+
+Saat phase "complete", sertakan conclusion:
 {"diagnosis_utama":"","icd10_code":"","diagnosis_banding":[{"diagnosis":"","icd10":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
 
 // Cache prompt dari DB
@@ -201,7 +217,7 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
 
   const raw = await callActiveAI(
     systemPrompt,
-    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru — Ronde ${Math.ceil((history.length + 1) / 2)}]:\n"${transcript}"\n\nLanjutkan penggalian anamnesis atau berikan kesimpulan klinis jika sudah cukup.`
+    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nEvaluasi missing_fields di atas. Tanya hanya field yang benar-benar kosong dan paling mengubah probabilitas diagnosis. Berikan conclusion segera jika data sudah cukup.`
   );
 
   const cleaned = raw
@@ -295,84 +311,232 @@ const ELEVEN_FREE_VOICES = [
   { id: 'XrExE9yKIg1WjnnlVkGX', name: 'Matilda',  desc: 'Cheerful & bright' },
 ];
 
-export { ELEVEN_FREE_VOICES };
+// ─── TTS Multi-Provider ─────────────────────────────────────────────────────
+//
+// Provider priority (dibaca dari DB key 'tts_provider'):
+//   'elevenlabs'  → ElevenLabs API (multilingual, paling natural)
+//   'google'      → Google Cloud TTS (stabil, konsisten Bahasa Indonesia)
+//   'openai'      → OpenAI TTS (tts-1, alloy/shimmer/nova)
+//   'browser'     → Web Speech API (offline, gratis, kualitas OS)
+//
+// Fallback otomatis: elevenlabs → google → openai → browser
 
-async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
+export const TTS_PROVIDERS = [
+  { id: 'elevenlabs', name: 'ElevenLabs',          desc: 'Paling natural, multi-bahasa. Perlu API key.' },
+  { id: 'google',     name: 'Google Cloud TTS',     desc: 'Sangat stabil, Bahasa Indonesia konsisten. Perlu API key.' },
+  { id: 'openai',     name: 'OpenAI TTS',           desc: 'Kualitas baik, model tts-1. Perlu OpenAI API key.' },
+  { id: 'azure',      name: 'Microsoft Azure TTS',  desc: 'Neural voices, sangat stabil. Perlu Azure key.' },
+  { id: 'browser',    name: 'Browser TTS (gratis)', desc: 'Offline, tidak perlu key. Kualitas bergantung OS.' },
+];
+
+export const GOOGLE_TTS_VOICES = [
+  { id: 'id-ID-Standard-A',  name: 'Standard A',    desc: 'Perempuan, standar' },
+  { id: 'id-ID-Standard-B',  name: 'Standard B',    desc: 'Laki-laki, standar' },
+  { id: 'id-ID-Standard-C',  name: 'Standard C',    desc: 'Perempuan, standar 2' },
+  { id: 'id-ID-Standard-D',  name: 'Standard D',    desc: 'Laki-laki, standar 2' },
+  { id: 'id-ID-Wavenet-A',   name: 'WaveNet A',     desc: 'Perempuan, neural (premium)' },
+  { id: 'id-ID-Wavenet-B',   name: 'WaveNet B',     desc: 'Laki-laki, neural (premium)' },
+  { id: 'id-ID-Wavenet-C',   name: 'WaveNet C',     desc: 'Perempuan, neural 2 (premium)' },
+  { id: 'id-ID-Wavenet-D',   name: 'WaveNet D',     desc: 'Laki-laki, neural 2 (premium)' },
+];
+
+export const OPENAI_TTS_VOICES = [
+  { id: 'shimmer', name: 'Shimmer', desc: 'Paling natural untuk Indonesia (rekomendasi)' },
+  { id: 'nova',    name: 'Nova',   desc: 'Perempuan, muda & cerah' },
+  { id: 'alloy',   name: 'Alloy',  desc: 'Netral, cocok klinis' },
+  { id: 'echo',    name: 'Echo',   desc: 'Laki-laki, dalam' },
+  { id: 'fable',   name: 'Fable',  desc: 'Ekspresif, hangat' },
+  { id: 'onyx',    name: 'Onyx',   desc: 'Laki-laki, otoritatif' },
+];
+
+/** Pilih suara browser terbaik untuk Bahasa Indonesia */
+function getBrowserVoiceID(): SpeechSynthesisVoice | null {
+  if (!('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  // Prioritas: id-ID > id > ms-ID > fallback pertama
+  return (
+    voices.find(v => v.lang === 'id-ID') ||
+    voices.find(v => v.lang.startsWith('id')) ||
+    voices.find(v => v.lang === 'ms-MY') ||
+    voices[0] ||
+    null
+  );
+}
+
+/** ElevenLabs TTS */
+async function speakElevenLabs(text: string, onEnd: () => void): Promise<boolean> {
   const apiKey =
     (import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined) ||
-    (await sbGetSetting<string>('ELEVENLABS_API_KEY')) ||
-    '';
-
-  if (!apiKey) {
-    console.warn('[Cenna TTS] No ElevenLabs API key — falling back to browser TTS');
-    speakBrowser(text, onEnd);
-    return;
-  }
+    (await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '';
+  if (!apiKey) return false;
 
   const voiceId = (await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9';
-  const speed   = (await sbGetSetting<number>('ELEVEN_SPEED'))   ?? 1.0;
-
+  const speed   = (await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0;
   try {
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey,
-        },
+        headers: { 'Content-Type': 'application/json', 'xi-api-key': apiKey },
         body: JSON.stringify({
           text,
           model_id: 'eleven_multilingual_v2',
-          voice_settings: {
-            stability:        0.45,
-            similarity_boost: 0.80,
-            style:            0.20,
-            use_speaker_boost: true,
-            speed,             // 0.7 – 1.2 didukung eleven_multilingual_v2
-          },
+          voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.20, use_speaker_boost: true, speed },
         }),
       },
     );
-
-    if (!res.ok) {
-      const err = await res.text();
-      console.warn('[Cenna TTS] ElevenLabs error:', res.status, err);
-      speakBrowser(text, onEnd);
-      return;
-    }
-
-    const blob  = await res.blob();
-    const url   = URL.createObjectURL(blob);
+    if (!res.ok) { console.warn('[TTS:EL] error', res.status); return false; }
+    const url = URL.createObjectURL(await res.blob());
     const audio = new Audio(url);
     audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
     audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
     await audio.play();
-    const voiceName = ELEVEN_FREE_VOICES.find(v => v.id === voiceId)?.name ?? voiceId;
-    console.log(`[Cenna TTS] ElevenLabs playing — ${voiceName} ×${speed}`);
-  } catch (err) {
-    console.warn('[Cenna TTS] fetch error:', err);
-    speakBrowser(text, onEnd);
-  }
+    return true;
+  } catch (e) { console.warn('[TTS:EL] fetch error:', e); return false; }
 }
 
+/** Google Cloud TTS — model id-ID-Standard-A atau Wavenet */
+async function speakGoogle(text: string, onEnd: () => void): Promise<boolean> {
+  const apiKey = (await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '';
+  if (!apiKey) return false;
+
+  const voiceName = (await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || 'id-ID-Standard-A';
+  const speakingRate = (await sbGetSetting<number>('GOOGLE_TTS_RATE')) ?? 1.0;
+  try {
+    const res = await fetch(
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text },
+          voice: { languageCode: 'id-ID', name: voiceName },
+          audioConfig: { audioEncoding: 'MP3', speakingRate },
+        }),
+      },
+    );
+    if (!res.ok) { console.warn('[TTS:GCP] error', res.status); return false; }
+    const { audioContent } = await res.json();
+    if (!audioContent) return false;
+    const audio = new Audio(`data:audio/mp3;base64,${audioContent}`);
+    audio.onended = onEnd;
+    audio.onerror = () => onEnd();
+    await audio.play();
+    return true;
+  } catch (e) { console.warn('[TTS:GCP] error:', e); return false; }
+}
+
+/** OpenAI TTS */
+async function speakOpenAI(text: string, onEnd: () => void): Promise<boolean> {
+  const apiKey = (await sbGetSetting<string>('OPENAI_TTS_KEY')) || '';
+  if (!apiKey) return false;
+
+  const voice = (await sbGetSetting<string>('OPENAI_TTS_VOICE')) || 'shimmer'; // shimmer paling natural untuk ID
+  const model = (await sbGetSetting<string>('OPENAI_TTS_MODEL')) || 'tts-1';
+  try {
+    const res = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, input: text, voice, response_format: 'mp3' }),
+    });
+    if (!res.ok) { console.warn('[TTS:OAI] error', res.status); return false; }
+    const url = URL.createObjectURL(await res.blob());
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
+    await audio.play();
+    return true;
+  } catch (e) { console.warn('[TTS:OAI] error:', e); return false; }
+}
+
+/** Microsoft Azure Cognitive TTS */
+async function speakAzure(text: string, onEnd: () => void): Promise<boolean> {
+  const subscriptionKey = (await sbGetSetting<string>('AZURE_TTS_KEY')) || '';
+  const region          = (await sbGetSetting<string>('AZURE_TTS_REGION')) || 'southeastasia';
+  if (!subscriptionKey) return false;
+
+  const voiceName  = (await sbGetSetting<string>('AZURE_TTS_VOICE'))  || 'id-ID-GadisNeural';
+  const speakingRate = (await sbGetSetting<number>('AZURE_TTS_RATE')) ?? 1.0;
+  const ratePercent = Math.round((speakingRate - 1) * 100);
+  const rateStr = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`;
+
+  const ssml = `<speak version='1.0' xml:lang='id-ID'>
+    <voice name='${voiceName}'>
+      <prosody rate='${rateStr}'>${text.replace(/[<>&]/g, c => c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;')}</prosody>
+    </voice>
+  </speak>`;
+
+  try {
+    const res = await fetch(
+      `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`,
+      {
+        method: 'POST',
+        headers: {
+          'Ocp-Apim-Subscription-Key': subscriptionKey,
+          'Content-Type': 'application/ssml+xml',
+          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
+        },
+        body: ssml,
+      },
+    );
+    if (!res.ok) { console.warn('[TTS:AZ] error', res.status); return false; }
+    const url = URL.createObjectURL(await res.blob());
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
+    await audio.play();
+    return true;
+  } catch (e) { console.warn('[TTS:AZ] error:', e); return false; }
+}
+
+/** Browser Web Speech TTS — selalu berhasil (fallback akhir) */
 function speakBrowser(text: string, onEnd: () => void): void {
   if (!('speechSynthesis' in window)) { onEnd(); return; }
   window.speechSynthesis.cancel();
-  const utt   = new SpeechSynthesisUtterance(text);
-  utt.lang    = 'id-ID';
-  utt.rate    = 1.0;
-  utt.onend   = onEnd;
-  utt.onerror = onEnd;
+  const utt = new SpeechSynthesisUtterance(text);
+  // Selalu paksa id-ID agar tidak campur bahasa
+  const idVoice = getBrowserVoiceID();
+  if (idVoice) utt.voice = idVoice;
+  utt.lang  = 'id-ID';
+  utt.rate  = 1.0;
+  utt.pitch = 1.0;
+  // Chrome bug: onend tidak selalu fire — fallback timeout berdasarkan panjang teks
+  const estimatedMs = Math.max(3000, text.length * 65);
+  let ended = false;
+  const finish = () => { if (ended) return; ended = true; onEnd(); };
+  utt.onend   = finish;
+  utt.onerror = finish;
   window.speechSynthesis.speak(utt);
-  setTimeout(onEnd, 6000);
+  setTimeout(finish, estimatedMs);
 }
-//
-// Perubahan dari v5.1:
-// - Hook mengelola mic permission sendiri (tidak bergantung prop `enabled`
-//   yang datang terlambat karena getUserMedia async di luar).
-// - `active` prop cukup dipakai untuk STOP (saat phase bukan idle).
-// - Tambah fallback: jika SpeechRecognition tidak ada, tidak crash.
+
+/**
+ * speak() — entry point utama.
+ * Coba provider sesuai urutan prioritas, fallback otomatis jika gagal.
+ */
+async function speak(text: string, onEnd: () => void): Promise<void> {
+  const preferredProvider = (await sbGetSetting<string>('tts_provider')) || 'elevenlabs';
+
+  const tryProviders = async (order: string[]): Promise<void> => {
+    for (const p of order) {
+      let ok = false;
+      if (p === 'elevenlabs') ok = await speakElevenLabs(text, onEnd);
+      else if (p === 'google') ok = await speakGoogle(text, onEnd);
+      else if (p === 'openai') ok = await speakOpenAI(text, onEnd);
+      else if (p === 'azure')  ok = await speakAzure(text, onEnd);
+      else if (p === 'browser') { speakBrowser(text, onEnd); return; }
+      if (ok) { console.log(`[TTS] playing via ${p}`); return; }
+      console.warn(`[TTS] ${p} failed, trying next...`);
+    }
+    // Semua API gagal — paksa browser
+    speakBrowser(text, onEnd);
+  };
+
+  // Susun urutan: preferred dulu, lalu sisanya, browser selalu terakhir
+  const fallbackOrder = ['elevenlabs', 'google', 'openai', 'azure']
+    .filter(p => p !== preferredProvider);
+  await tryProviders([preferredProvider, ...fallbackOrder, 'browser']);
+}
 
 function useWakeWord(onDetected: () => void, active: boolean) {
   const recRef      = useRef<SpeechRecognition | null>(null);
@@ -1079,8 +1243,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       setPhase('listening');
     };
 
-    // ElevenLabs TTS — Charlotte menyapa dokter
-    speakElevenLabs('Halo dokter, ada yang bisa Cenna bantu?', goListening);
+    // speak() — otomatis pilih provider dari settings
+    speak('Halo dokter, ada yang bisa Cenna bantu?', goListening);
   }, []);
 
   // Reset firedRef ketika phase kembali ke idle (setelah popup/close)
@@ -1150,22 +1314,20 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
           session_rounds: Math.ceil(currentHistory.length / 2),
         }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
 
-        speakElevenLabs(aiResult.voice_response, () => {
+        speak(aiResult.voice_response, () => {
           if (aiResult.conclusion) {
-            // Tampilkan ConclusionPopup dengan diagnosa lengkap
             setConclusionData(aiResult.conclusion);
             setRedFlagsData(aiResult.red_flags);
             setCapturedData(mergeSessionData(sessionDataRef.current));
             setPhase('popup');
           } else {
-            // Tidak ada conclusion (kata penutup saja) — tampilkan DataPopup biasa
             setCapturedData(mergeSessionData(sessionDataRef.current));
             setPhase('popup');
           }
         });
       } else {
         // Normal — ucapkan, langsung balik listening (handsfree)
-        speakElevenLabs(aiResult.voice_response, () => {
+        speak(aiResult.voice_response, () => {
           setPhase('listening');
         });
       }
@@ -1270,9 +1432,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
               <p className="text-[11px] tracking-[0.1em] text-[#7F77DD]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>
                 Mendengarkan — jeda 3 detik untuk diproses
               </p>
-              {conversationHistoryRef.current!.length > 0 && (
+              {_currentAnamnesis.missing_fields.length > 0 && (
                 <p className="text-[9px] tracking-[0.08em] text-[#7F77DD]/50 mt-1" style={{ fontFamily: "'DM Mono', monospace" }}>
-                  ronde {Math.ceil(conversationHistoryRef.current!.length / 2) + 1} / 6
+                  perlu: {_currentAnamnesis.missing_fields.slice(0, 3).join(', ')}{_currentAnamnesis.missing_fields.length > 3 ? ` +${_currentAnamnesis.missing_fields.length - 3}` : ''}
                 </p>
               )}
             </>

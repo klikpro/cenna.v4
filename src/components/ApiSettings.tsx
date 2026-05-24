@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient, addLocalLog, sbSetSetting, sbGetSetting } from '../lib/supabase';
-import { ELEVEN_FREE_VOICES } from './LandingPage';
+import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './LandingPage';
 
 interface ApiSettingsProps {
   onSettingsSaved: () => void;
@@ -249,6 +249,52 @@ export const AI_PROVIDERS = [
       return data.choices?.[0]?.message?.content || '';
     },
   },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter (Multi-Key)',
+    icon: '🔀',
+    keyLabel: 'OpenRouter API Key(s) — pisahkan dengan koma untuk multi-key',
+    keyPlaceholder: 'sk-or-v1-xxx,sk-or-v1-yyy,sk-or-v1-zzz',
+    docsUrl: 'https://openrouter.ai/keys',
+    models: [
+      { value: 'anthropic/claude-sonnet-4-6',            label: 'Claude Sonnet 4.6 via OR — Akurat & Cepat' },
+      { value: 'openai/gpt-4.1',                         label: 'GPT-4.1 via OR — 1M Context' },
+      { value: 'google/gemini-2.5-pro',                  label: 'Gemini 2.5 Pro via OR — 1M Token' },
+      { value: 'meta-llama/llama-4-maverick:free',       label: 'Llama 4 Maverick — Gratis via OR' },
+      { value: 'deepseek/deepseek-r1:free',              label: 'DeepSeek R1 — Gratis via OR' },
+      { value: 'mistralai/mistral-large-2411',           label: 'Mistral Large 3 via OR' },
+      { value: 'qwen/qwen3-235b-a22b:free',              label: 'Qwen3 235B — Gratis via OR' },
+      { value: 'google/gemma-3-27b-it:free',             label: 'Gemma 3 27B — Gratis via OR' },
+    ],
+    defaultModel: 'anthropic/claude-sonnet-4-6',
+    callFn: async (apiKey: string, model: string, systemPrompt: string, userMsg: string, temp: number, maxTokens: number) => {
+      // Multi-key: apiKey bisa berisi beberapa key dipisah koma
+      // Rotasi berdasarkan timestamp agar beban merata
+      const keys = apiKey.split(',').map(k => k.trim()).filter(Boolean);
+      const activeKey = keys[Math.floor(Date.now() / 60000) % keys.length];
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${activeKey}`,
+          'HTTP-Referer': window.location.origin,
+          'X-Title': 'CENNA AI Clinical Assistant',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: temp,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user',   content: userMsg },
+          ],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data));
+      return data.choices?.[0]?.message?.content || '';
+    },
+  },
 ];
 
 // ─── In-memory cache untuk AI config (agar tidak hit DB tiap panggilan) ────────
@@ -329,10 +375,26 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [sttKey, setSttKey] = useState('');
   const [sttProvider, setSttProvider] = useState('openai-whisper');
   const [sttLang, setSttLang] = useState('id');
+  // ElevenLabs
   const [elevenLabsKey, setElevenLabsKey] = useState('');
   const [elevenVoiceId, setElevenVoiceId] = useState('cgSgspJ2msm6clMCkdW9');
   const [elevenSpeed,   setElevenSpeed]   = useState(1.0);
   const [elevenPreview, setElevenPreview] = useState<'idle'|'loading'|'playing'>('idle');
+  // Google TTS
+  const [googleTtsKey,    setGoogleTtsKey]    = useState('');
+  const [googleTtsVoice,  setGoogleTtsVoice]  = useState('id-ID-Standard-A');
+  const [googleTtsRate,   setGoogleTtsRate]   = useState(1.0);
+  // OpenAI TTS
+  const [openaiTtsKey,   setOpenaiTtsKey]   = useState('');
+  const [openaiTtsVoice, setOpenaiTtsVoice] = useState('shimmer');
+  const [openaiTtsModel, setOpenaiTtsModel] = useState('tts-1');
+  // Azure TTS
+  const [azureTtsKey,    setAzureTtsKey]    = useState('');
+  const [azureTtsRegion, setAzureTtsRegion] = useState('southeastasia');
+  const [azureTtsVoice,  setAzureTtsVoice]  = useState('id-ID-GadisNeural');
+  const [azureTtsRate,   setAzureTtsRate]   = useState(1.0);
+  // TTS provider pilihan
+  const [ttsPrefProvider, setTtsPrefProvider] = useState('elevenlabs');
 
   const currentProviderDef = AI_PROVIDERS.find(p => p.id === activeProvider) || AI_PROVIDERS[0];
 
@@ -383,6 +445,21 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       setElevenLabsKey((await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '');
       setElevenVoiceId((await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9');
       setElevenSpeed((await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0);
+      // ── Google TTS ──
+      setGoogleTtsKey((await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '');
+      setGoogleTtsVoice((await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || 'id-ID-Standard-A');
+      setGoogleTtsRate((await sbGetSetting<number>('GOOGLE_TTS_RATE')) ?? 1.0);
+      // ── OpenAI TTS ──
+      setOpenaiTtsKey((await sbGetSetting<string>('OPENAI_TTS_KEY')) || '');
+      setOpenaiTtsVoice((await sbGetSetting<string>('OPENAI_TTS_VOICE')) || 'shimmer');
+      setOpenaiTtsModel((await sbGetSetting<string>('OPENAI_TTS_MODEL')) || 'tts-1');
+      // ── Azure TTS ──
+      setAzureTtsKey((await sbGetSetting<string>('AZURE_TTS_KEY')) || '');
+      setAzureTtsRegion((await sbGetSetting<string>('AZURE_TTS_REGION')) || 'southeastasia');
+      setAzureTtsVoice((await sbGetSetting<string>('AZURE_TTS_VOICE')) || 'id-ID-GadisNeural');
+      setAzureTtsRate((await sbGetSetting<number>('AZURE_TTS_RATE')) ?? 1.0);
+      // ── TTS preferred ──
+      setTtsPrefProvider((await sbGetSetting<string>('tts_provider')) || 'elevenlabs');
     }
     loadSettings();
   }, []);
@@ -506,11 +583,27 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         keyConfigured: !!sttKey.trim(),
         updatedAt: new Date().toISOString(),
       });
+      // ElevenLabs
       await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
       await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
       await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
-      addLocalLog('success', 'SYSTEM', 'STT config updated.');
-      alert('✅ Konfigurasi Speech-to-Text berhasil disimpan ke database!');
+      // Google TTS
+      await sbSetSetting('GOOGLE_TTS_KEY', googleTtsKey.trim());
+      await sbSetSetting('GOOGLE_TTS_VOICE', googleTtsVoice);
+      await sbSetSetting('GOOGLE_TTS_RATE', googleTtsRate);
+      // OpenAI TTS
+      await sbSetSetting('OPENAI_TTS_KEY', openaiTtsKey.trim());
+      await sbSetSetting('OPENAI_TTS_VOICE', openaiTtsVoice);
+      await sbSetSetting('OPENAI_TTS_MODEL', openaiTtsModel);
+      // Azure TTS
+      await sbSetSetting('AZURE_TTS_KEY', azureTtsKey.trim());
+      await sbSetSetting('AZURE_TTS_REGION', azureTtsRegion);
+      await sbSetSetting('AZURE_TTS_VOICE', azureTtsVoice);
+      await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
+      // Preferred TTS provider
+      await sbSetSetting('tts_provider', ttsPrefProvider);
+      addLocalLog('success', 'SYSTEM', `STT/TTS config updated. TTS utama: ${ttsPrefProvider}.`);
+      alert('✅ Konfigurasi Speech/TTS berhasil disimpan ke database!');
     } catch (e: any) {
       console.error('[handleSaveSTT] Error:', e);
       alert(`❌ Gagal menyimpan STT config!\n\n${e.message}`);
@@ -783,11 +876,13 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
           <div className="border-t border-gray-100 pt-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-sm text-[#1e2a4a]">🎙️ ElevenLabs TTS — Suara Cenna</h4>
-                <p className="text-[10px] text-slate-400 mt-0.5">Free-tier voices · Model: eleven_multilingual_v2</p>
+                <h4 className="font-bold text-sm text-[#1e2a4a]">🎙️ ElevenLabs TTS</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">Paling natural, multilingual · Model: eleven_multilingual_v2</p>
               </div>
-              <a href="https://elevenlabs.io" target="_blank" rel="noreferrer"
-                className="text-[10px] text-blue-500 hover:underline">Dapatkan Key ↗</a>
+              <div className="flex items-center gap-2">
+                {ttsPrefProvider === 'elevenlabs' && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">AKTIF</span>}
+                <a href="https://elevenlabs.io" target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Key ↗</a>
+              </div>
             </div>
 
             {/* API Key */}
@@ -885,10 +980,131 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               {elevenPreview === 'loading' ? '⏳ Memuat...' : elevenPreview === 'playing' ? '🔊 Memutar...' : '▶️ Preview Suara'}
             </button>
           </div>
+          {/* Google Cloud TTS */}
+          <div className="border-t border-gray-100 pt-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-[#1e2a4a]">🔵 Google Cloud TTS</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">Bahasa Indonesia konsisten · Standard & WaveNet neural</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {ttsPrefProvider === 'google' && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">AKTIF</span>}
+                <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Key ↗</a>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Google Cloud API Key</label>
+                <input type="password" value={googleTtsKey} onChange={e => setGoogleTtsKey(e.target.value)} placeholder="AIzaSy-xxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Suara</label>
+                <select value={googleTtsVoice} onChange={e => setGoogleTtsVoice(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800">
+                  {GOOGLE_TTS_VOICES.map(v => <option key={v.id} value={v.id}>{v.name} — {v.desc}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Kecepatan: <span className="font-mono">{googleTtsRate}×</span></label>
+                <input type="range" min="0.7" max="1.3" step="0.1" value={googleTtsRate} onChange={e => setGoogleTtsRate(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 appearance-none cursor-pointer accent-[#1e2a4a] rounded-lg" />
+              </div>
+            </div>
+          </div>
+
+          {/* OpenAI TTS */}
+          <div className="border-t border-gray-100 pt-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-[#1e2a4a]">🟢 OpenAI TTS</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">tts-1 / tts-1-hd · Pakai OpenAI API key yang sama</p>
+              </div>
+              {ttsPrefProvider === 'openai' && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">AKTIF</span>}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-3 space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">OpenAI API Key (TTS)</label>
+                <p className="text-[9px] text-slate-400">Bisa sama dengan key AI Engine jika OpenAI GPT sudah dikonfigurasi.</p>
+                <input type="password" value={openaiTtsKey} onChange={e => setOpenaiTtsKey(e.target.value)} placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Suara</label>
+                <select value={openaiTtsVoice} onChange={e => setOpenaiTtsVoice(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800">
+                  {OPENAI_TTS_VOICES.map(v => <option key={v.id} value={v.id}>{v.name} — {v.desc}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Model</label>
+                <select value={openaiTtsModel} onChange={e => setOpenaiTtsModel(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800">
+                  <option value="tts-1">tts-1 — Cepat & efisien</option>
+                  <option value="tts-1-hd">tts-1-hd — Kualitas tinggi</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Azure TTS */}
+          <div className="border-t border-gray-100 pt-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-[#1e2a4a]">🔷 Microsoft Azure TTS</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">Neural voices id-ID · GadisNeural & ArdiNeural</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {ttsPrefProvider === 'azure' && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">AKTIF</span>}
+                <a href="https://portal.azure.com" target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Key ↗</a>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Azure Subscription Key</label>
+                <input type="password" value={azureTtsKey} onChange={e => setAzureTtsKey(e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Region</label>
+                <select value={azureTtsRegion} onChange={e => setAzureTtsRegion(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800">
+                  <option value="southeastasia">Southeast Asia (Singapura)</option>
+                  <option value="eastasia">East Asia</option>
+                  <option value="australiaeast">Australia East</option>
+                  <option value="eastus">East US</option>
+                  <option value="westeurope">West Europe</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Suara Neural</label>
+                <select value={azureTtsVoice} onChange={e => setAzureTtsVoice(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none text-slate-800">
+                  <option value="id-ID-GadisNeural">Gadis — Perempuan, hangat (rekomendasi)</option>
+                  <option value="id-ID-ArdiNeural">Ardi — Laki-laki, profesional</option>
+                  <option value="id-ID-Standard-A">Standard A — Perempuan</option>
+                  <option value="id-ID-Standard-B">Standard B — Laki-laki</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Kecepatan: <span className="font-mono">{azureTtsRate}×</span></label>
+                <input type="range" min="0.7" max="1.3" step="0.1" value={azureTtsRate} onChange={e => setAzureTtsRate(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 appearance-none cursor-pointer accent-[#1e2a4a] rounded-lg mt-2" />
+              </div>
+            </div>
+          </div>
+
+          {/* TTS Provider Pilihan */}
+          <div className="border-t border-gray-100 pt-5 space-y-3">
+            <div>
+              <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">🔊 Provider TTS Utama CENNA</h4>
+              <p className="text-[10px] text-slate-500">Jika gagal, sistem fallback otomatis ke provider berikutnya yang sudah dikonfigurasi, lalu ke Browser TTS.</p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {[{id:'elevenlabs',name:'ElevenLabs'},{id:'google',name:'Google TTS'},{id:'openai',name:'OpenAI TTS'},{id:'azure',name:'Azure TTS'},{id:'browser',name:'Browser'}].map(tp => (
+                <button key={tp.id} onClick={() => setTtsPrefProvider(tp.id)}
+                  className={`p-2.5 rounded-xl border-2 text-left transition cursor-pointer ${ ttsPrefProvider === tp.id ? 'border-[#1e2a4a] bg-[#1e2a4a]/8 shadow-sm' : 'border-gray-200 hover:border-[#1e2a4a]/40 bg-white'}`}>
+                  <p className="text-[11px] font-bold text-[#1e2a4a] leading-tight">{tp.name}</p>
+                  {ttsPrefProvider === tp.id && <div className="mt-1.5 flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500" /><span className="text-[9px] text-emerald-600 font-bold">AKTIF</span></div>}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="pt-4 border-t border-gray-100">
             <button id="btn-save-stt" onClick={handleSaveSTT}
               className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md">
-              💾 Simpan STT Config
+              💾 Simpan Semua STT/TTS Config
             </button>
           </div>
         </div>
