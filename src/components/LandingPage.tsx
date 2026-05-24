@@ -358,7 +358,6 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         {/* Brand text — NO subtitle */}
         <div className="mt-6 space-y-1">
           <h1 className="text-3xl font-light tracking-[0.22em] uppercase text-[#1e2a4a]"
-            style={{ fontFamily: "'DM Sans', sans-serif", letterSpacing: '0.24em' }}>CENNA</h1>
         </div>
 
         {/* Wake-word status hint */}
