@@ -228,21 +228,29 @@ export async function sbGetSetting<T>(key: string): Promise<T | null> {
     console.warn(`[sbGetSetting] No Supabase client — key: ${key}`);
     return null;
   }
-  const { data, error } = await client
-    .from('app_settings')
-    .select('value')
-    .eq('key', key)
-    .maybeSingle();
-  if (error) {
-    console.error(`[sbGetSetting] Error reading key "${key}":`, error.message, error.code);
-    return null;
+
+  // Coba exact key dulu, lalu fallback ke lowercase (data lama mungkin disimpan lowercase)
+  const keysToTry = Array.from(new Set([key, key.toLowerCase(), key.toUpperCase()]));
+
+  for (const k of keysToTry) {
+    const { data, error } = await client
+      .from('app_settings')
+      .select('value')
+      .eq('key', k)
+      .maybeSingle();
+    if (error) {
+      console.error(`[sbGetSetting] Error reading key "${k}":`, error.message, error.code);
+      continue;
+    }
+    if (data) {
+      if (k !== key) console.info(`[sbGetSetting] Found "${key}" via fallback key "${k}"`);
+      else console.debug(`[sbGetSetting] OK key "${k}":`, typeof data.value, String(data.value).slice(0, 30));
+      return data.value as T;
+    }
   }
-  if (!data) {
-    console.info(`[sbGetSetting] Key not found: "${key}"`);
-    return null;
-  }
-  console.debug(`[sbGetSetting] OK key "${key}":`, typeof data.value, String(data.value).slice(0, 30));
-  return data.value as T;
+
+  console.info(`[sbGetSetting] Key not found: "${key}" (tried: ${keysToTry.join(', ')})`);
+  return null;
 }
 
 export async function sbSetSetting(key: string, value: unknown): Promise<void> {
@@ -251,6 +259,20 @@ export async function sbSetSetting(key: string, value: unknown): Promise<void> {
   await client
     .from('app_settings')
     .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+}
+
+/** Debug helper: dump semua key di app_settings ke console. Panggil sekali dari DevTools. */
+export async function sbDumpAllSettingKeys(): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) { console.warn('[sbDump] No client'); return; }
+  const { data, error } = await client
+    .from('app_settings')
+    .select('key, updated_at')
+    .order('key');
+  if (error) { console.error('[sbDump] Error:', error.message); return; }
+  console.group('[sbDump] All keys in app_settings (' + (data?.length ?? 0) + ' rows)');
+  (data ?? []).forEach(row => console.log(' •', JSON.stringify(row.key), '—', row.updated_at));
+  console.groupEnd();
 }
 
 // —— DOCTORS ————————————————————————————————————————————————————————————————————————
