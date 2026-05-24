@@ -89,11 +89,13 @@ export const AI_PROVIDERS = [
     keyPlaceholder: 'AIzaSy-xxxxxxxxxxxxxxxx',
     docsUrl: 'https://aistudio.google.com',
     models: [
-      { value: 'gemini-2.0-flash',       label: 'Gemini 2.0 Flash — Tercepat & Terkini' },
-      { value: 'gemini-1.5-pro',         label: 'Gemini 1.5 Pro — Konteks Panjang 1M Token' },
-      { value: 'gemini-1.5-flash',       label: 'Gemini 1.5 Flash — Cepat & Hemat' },
+      { value: 'gemini-3.5-flash',        label: 'Gemini 3.5 Flash — Terbaru, Agentic & Coding (Default)' },
+      { value: 'gemini-3-flash',           label: 'Gemini 3 Flash — Frontier Intelligence, Cepat & Efisien' },
+      { value: 'gemini-2.5-pro',           label: 'Gemini 2.5 Pro — Konteks Panjang 1M Token, Paling Akurat' },
+      { value: 'gemini-2.5-flash',         label: 'Gemini 2.5 Flash — Stabil & Production-Ready' },
+      { value: 'gemini-2.5-flash-lite',    label: 'Gemini 2.5 Flash-Lite — Ultra Hemat & Cepat' },
     ],
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-3.5-flash',
     callFn: async (apiKey: string, model: string, systemPrompt: string, userMsg: string, temp: number, maxTokens: number) => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
