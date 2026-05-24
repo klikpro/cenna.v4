@@ -16,6 +16,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { sbGetSetting } from '../lib/supabase';
+import { callActiveAI } from './ApiSettings';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ interface LandingPageProps {
   onLoginClick: () => void;
 }
 
-type OrbPhase = 'idle' | 'speaking' | 'listening' | 'popup';
+type OrbPhase = 'idle' | 'speaking' | 'listening' | 'processing' | 'responding' | 'popup';
 
 interface CapturedData {
   transcript: string;
@@ -102,6 +103,64 @@ function matchesWakeWord(raw: string): boolean {
   if (fuzzy) console.log('[Cenna wake] ✓ MATCHED (fuzzy) on:', JSON.stringify(t));
   else       console.log('[Cenna wake] ✗ no match for:', JSON.stringify(t));
   return fuzzy;
+}
+
+// ─── AI Voice Assistant: system prompt + structured output ───────────────────
+
+const CENNA_VOICE_SYSTEM_PROMPT = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia yang membantu dokter saat konsultasi berjalan.
+
+Tugas utama:
+1. Dengarkan transkrip percakapan dokter-pasien.
+2. Berikan RESPONS SUARA yang natural, singkat (1-3 kalimat), empatik, dan relevan secara klinis.
+3. Sekaligus, ekstrak data medis terstruktur dari percakapan tersebut.
+
+Aturan respons suara:
+- Jawab dalam Bahasa Indonesia yang natural dan hangat.
+- Maksimal 2-3 kalimat — ini akan diucapkan via TTS.
+- Jika ada keluhan, akui dan beri catatan relevan singkat.
+- Jika ada pertanyaan dokter kepada pasien, bantu konfirmasi atau beri konteks.
+- Jika tidak ada konteks klinis jelas, cukup konfirmasi bahwa data tercatat.
+- JANGAN menyebut nama obat spesifik tanpa konteks yang jelas.
+- JANGAN beri diagnosis — hanya bantu catat dan identifikasi.
+
+Format output WAJIB JSON (tidak ada teks di luar JSON):
+{
+  "voice_response": "<teks yang akan diucapkan TTS, 1-3 kalimat>",
+  "keluhan": ["<keluhan 1>", "<keluhan 2>"],
+  "obat": ["<obat/terapi 1>"],
+  "pertanyaan": ["<pertanyaan klinis yang terdeteksi>"],
+  "ringkasan": "<ringkasan 1 kalimat untuk pop-up>"
+}`;
+
+async function callCennaAI(transcript: string): Promise<{
+  voice_response: string;
+  keluhan: string[];
+  obat: string[];
+  pertanyaan: string[];
+  ringkasan: string;
+}> {
+  const raw = await callActiveAI(
+    CENNA_VOICE_SYSTEM_PROMPT,
+    `Transkrip percakapan:
+"${transcript}"
+
+Berikan respons JSON sesuai format.`
+  );
+
+  // Parse JSON — strip markdown fences jika ada
+  const cleaned = raw.replace(/```json|```/gi, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Fallback jika parsing gagal
+    return {
+      voice_response: 'Data percakapan sudah dicatat, dokter.',
+      keluhan: [],
+      obat: [],
+      pertanyaan: [],
+      ringkasan: transcript.slice(0, 80),
+    };
+  }
 }
 
 // ─── Deteksi nada tanya ───────────────────────────────────────────────────────
@@ -452,6 +511,9 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   }, [enabled, start, stop]);
 }
 
+// ─── Palet processing (ungu elektrik) ────────────────────────────────────────
+const PALETTE_PROCESSING = { r: 127, g: 119, b: 221 }; // #7F77DD
+
 // ─── Hook: canvas animasi per fase ───────────────────────────────────────────
 
 function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phase: OrbPhase) {
@@ -477,9 +539,15 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
       let ringAlpha = 0.07, pulseSpeed = 0.010, ringCount = 3, waveAmp = 8;
       let c1 = PALETTE.navy, c2 = PALETTE.tan;
 
-      if (phase === 'speaking')  { c1 = PALETTE.tan;   c2 = PALETTE.cream; ringAlpha = 0.12; pulseSpeed = 0.030; ringCount = 4; waveAmp = 28; }
-      else if (phase === 'listening') { c1 = PALETTE.navy; c2 = PALETTE.cream; ringAlpha = 0.14; pulseSpeed = 0.025; ringCount = 5; waveAmp = 40; }
-      else if (phase === 'popup') { c1 = PALETTE.cream; c2 = PALETTE.tan;   ringAlpha = 0.08; pulseSpeed = 0.008; ringCount = 3; waveAmp = 6; }
+      if (phase === 'speaking' || phase === 'responding') {
+        c1 = PALETTE.tan; c2 = PALETTE.cream; ringAlpha = 0.12; pulseSpeed = 0.030; ringCount = 4; waveAmp = 28;
+      } else if (phase === 'listening') {
+        c1 = PALETTE.navy; c2 = PALETTE.cream; ringAlpha = 0.14; pulseSpeed = 0.025; ringCount = 5; waveAmp = 40;
+      } else if (phase === 'processing') {
+        c1 = PALETTE_PROCESSING; c2 = PALETTE.cream; ringAlpha = 0.18; pulseSpeed = 0.055; ringCount = 6; waveAmp = 20;
+      } else if (phase === 'popup') {
+        c1 = PALETTE.cream; c2 = PALETTE.tan; ringAlpha = 0.08; pulseSpeed = 0.008; ringCount = 3; waveAmp = 6;
+      }
 
       angleRef.current += pulseSpeed;
       const a = angleRef.current;
@@ -534,8 +602,18 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
 interface OrbCoreProps { phase: OrbPhase; wakeEnabled: boolean; wakeFlash: boolean; }
 
 function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
-  const glowColor = { idle: '#1e2a4a', speaking: '#b8a898', listening: '#1e2a4a', popup: '#b8a898' }[phase];
-  const orbRing   = { idle: 'ring-[3px] ring-[#1e2a4a]/20', speaking: 'ring-[5px] ring-[#b8a898]/60', listening: 'ring-[5px] ring-[#1e2a4a]/40', popup: 'ring-[3px] ring-[#b8a898]/30' }[phase];
+  const glowColor = {
+    idle: '#1e2a4a', speaking: '#b8a898', listening: '#1e2a4a',
+    processing: '#7F77DD', responding: '#b8a898', popup: '#b8a898'
+  }[phase];
+  const orbRing = {
+    idle: 'ring-[3px] ring-[#1e2a4a]/20',
+    speaking: 'ring-[5px] ring-[#b8a898]/60',
+    listening: 'ring-[5px] ring-[#1e2a4a]/40',
+    processing: 'ring-[6px] ring-[#7F77DD]/70',
+    responding: 'ring-[5px] ring-[#b8a898]/60',
+    popup: 'ring-[3px] ring-[#b8a898]/30',
+  }[phase];
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: 340, height: 340 }}>
@@ -566,11 +644,19 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
               ))}
             </div>
           )}
-          {phase === 'speaking' && (
+          {(phase === 'speaking' || phase === 'responding') && (
             <div className="flex gap-[5px] items-end h-7">
               {[0.6, 0.9, 1, 0.8, 0.5, 0.7, 0.4].map((s, i) => (
                 <div key={i} className="w-[3px] rounded-full bg-white"
                   style={{ height: `${s * 24}px`, animation: `barBounce 0.45s ease-in-out ${i * 0.06}s infinite alternate` }} />
+              ))}
+            </div>
+          )}
+          {phase === 'processing' && (
+            <div className="flex gap-[6px] items-center">
+              {[0,1,2,3,4,5].map(i => (
+                <div key={i} className="rounded-full"
+                  style={{ width: 4, height: 4, background: 'rgba(255,255,255,0.9)', animation: `processingDot 1.1s ease-in-out ${i*0.12}s infinite` }} />
               ))}
             </div>
           )}
@@ -599,27 +685,32 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
 
 // ─── StatusPill ───────────────────────────────────────────────────────────────
 
-function StatusPill({ phase }: { phase: OrbPhase }) {
+function StatusPill({ phase, aiLabel }: { phase: OrbPhase; aiLabel: string }) {
   const config = {
-    idle:      { color: '#b8a898', label: 'Siap — ucapkan "Hai Cenna"' },
-    speaking:  { color: '#10b981', label: 'Menyapa…' },
-    listening: { color: '#7F77DD', label: 'Mendengarkan percakapan' },
-    popup:     { color: '#b8a898', label: 'Data ditangkap' },
+    idle:       { color: '#b8a898', label: 'Siap — ucapkan "Hai Cenna"' },
+    speaking:   { color: '#10b981', label: 'Menyapa…' },
+    listening:  { color: '#7F77DD', label: 'Mendengarkan percakapan' },
+    processing: { color: '#7F77DD', label: aiLabel || 'Cenna sedang berpikir…' },
+    responding: { color: '#10b981', label: 'Cenna merespons…' },
+    popup:      { color: '#b8a898', label: 'Data ditangkap' },
   }[phase];
   return (
     <div className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-[#1e2a4a]/8 bg-white/60 backdrop-blur-sm"
       style={{ fontFamily: "'DM Mono', monospace" }}>
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: config.color, animation: 'pulse 1.5s ease-in-out infinite' }} />
-      <span className="text-[10px] tracking-[0.18em] uppercase text-[#1e2a4a]/40 font-medium">{config.label}</span>
+      <span className="text-[10px] tracking-[0.18em] uppercase text-[#1e2a4a]/40 font-medium"
+        style={phase === 'processing' ? { color: '#7F77DD', opacity: 1 } : {}}>
+        {config.label}
+      </span>
     </div>
   );
 }
 
 // ─── DataPopup ────────────────────────────────────────────────────────────────
 
-interface DataPopupProps { data: CapturedData; onClose: () => void; onSOAP: () => void; }
+interface DataPopupProps { data: CapturedData; onClose: () => void; onSOAP: () => void; canContinue?: boolean; onContinue?: () => void; }
 
-function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
+function DataPopup({ data, onClose, onSOAP, canContinue, onContinue }: DataPopupProps) {
   return (
     <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,42,74,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' }}>
       <div style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 460, boxShadow: '0 32px 72px -12px rgba(30,42,74,0.28)', overflow: 'hidden', animation: 'popupIn 0.35s cubic-bezier(0.16,1,0.3,1) forwards' }}>
@@ -673,8 +764,14 @@ function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
               style={{ flex: 1, padding: '9px 0', fontSize: 12, fontWeight: 500, background: '#1e2a4a', color: '#f5f0e8', border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
               Buat SOAP
             </button>
+            {canContinue && onContinue && (
+              <button onClick={onContinue}
+                style={{ padding: '9px 14px', fontSize: 12, fontWeight: 500, background: '#7F77DD', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                ↩ Lanjut
+              </button>
+            )}
             <button onClick={onClose}
-              style={{ padding: '9px 16px', fontSize: 12, background: 'none', color: '#b8a898', border: '1px solid #e5e2dc', borderRadius: 8, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+              style={{ padding: '9px 14px', fontSize: 12, background: 'none', color: '#b8a898', border: '1px solid #e5e2dc', borderRadius: 8, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
               Tutup
             </button>
           </div>
@@ -693,10 +790,17 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [wakeFlash,    setWakeFlash]    = useState(false);
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
   const [customLogoUrl, setCustomLogoUrl] = useState<string | null>(null);
+  const [aiLabel,      setAiLabel]      = useState('Cenna sedang berpikir…');
+  const [aiEnabled,    setAiEnabled]    = useState(false); // true jika AI key tersedia
+  const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
 
   useEffect(() => {
     sbGetSetting<{ logoUrl?: string }>('branding').then(b => {
       if (b?.logoUrl) setCustomLogoUrl(b.logoUrl);
+    });
+    // Cek apakah AI key sudah dikonfigurasi
+    sbGetSetting<{ provider: string; keyConfigured?: boolean }>('api_ai_config').then(cfg => {
+      if (cfg?.keyConfigured) setAiEnabled(true);
     });
   }, []);
 
@@ -750,10 +854,47 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   // Wake-word aktif saat idle — hook mengelola mic permission sendiri
   useWakeWord(handleWakeWord, phase === 'idle');
 
-  const handleAmbientData = useCallback((data: CapturedData) => {
-    setCapturedData(data);
-    setPhase('popup');
-  }, []);
+  const handleAmbientData = useCallback(async (data: CapturedData) => {
+    if (!aiEnabled) {
+      // Fallback: mode lama tanpa AI
+      setCapturedData(data);
+      setPhase('popup');
+      return;
+    }
+
+    // Mode AI: masuk fase processing
+    setPhase('processing');
+    setAiLabel('Menganalisis percakapan…');
+    conversationHistoryRef.current.push({ role: 'user', content: data.transcript });
+
+    try {
+      setAiLabel('Cenna sedang berpikir…');
+      const aiResult = await callCennaAI(data.transcript);
+
+      // Simpan respons AI ke history percakapan
+      conversationHistoryRef.current.push({ role: 'assistant', content: aiResult.voice_response });
+
+      // Fase responding: ucapkan respons AI via TTS
+      setPhase('responding');
+      const enrichedData: CapturedData = {
+        ...data,
+        keluhan:    aiResult.keluhan.length    ? aiResult.keluhan    : data.keluhan,
+        obat:       aiResult.obat.length       ? aiResult.obat       : data.obat,
+        pertanyaan: aiResult.pertanyaan.length ? aiResult.pertanyaan : data.pertanyaan,
+      };
+
+      speakElevenLabs(aiResult.voice_response, () => {
+        setCapturedData(enrichedData);
+        setPhase('popup');
+      });
+
+    } catch (err) {
+      console.warn('[Cenna AI] gagal:', err);
+      // Fallback ke popup tanpa AI response
+      setCapturedData(data);
+      setPhase('popup');
+    }
+  }, [aiEnabled]);
 
   useAmbientListener({
     enabled:   phase === 'listening',
@@ -763,10 +904,23 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleClosePopup = () => {
     setCapturedData(null);
-    setPhase('idle'); // kembali ke idle agar wake word bisa aktif lagi
+    // Kembali ke listening jika history masih ada (chaining conversation)
+    if (conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 10) {
+      setPhase('listening');
+    } else {
+      conversationHistoryRef.current = [];
+      setPhase('idle');
+    }
+  };
+
+  const handleEndConversation = () => {
+    conversationHistoryRef.current = [];
+    setCapturedData(null);
+    setPhase('idle');
   };
 
   const handleSOAP = () => {
+    conversationHistoryRef.current = [];
     setCapturedData(null);
     onLoginClick();
   };
@@ -802,10 +956,15 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
         <OrbCore phase={phase} wakeEnabled={phase === 'idle'} wakeFlash={wakeFlash} />
-        <div className="mt-5" style={{ minHeight: 36 }}>
+        <div className="mt-5" style={{ minHeight: 44 }}>
           {phase === 'idle' && !hasSpeechAPI && (
             <p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>
               Wake word tidak didukung browser ini
+            </p>
+          )}
+          {phase === 'idle' && hasSpeechAPI && (
+            <p className="text-[10px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>
+              {aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}
             </p>
           )}
           {phase === 'speaking' && (
@@ -814,19 +973,51 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
             </p>
           )}
           {phase === 'listening' && (
-            <p className="text-[11px] tracking-[0.1em] text-[#7F77DD]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>
-              Mendengarkan percakapan — jeda untuk mencatat
+            <>
+              <p className="text-[11px] tracking-[0.1em] text-[#7F77DD]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>
+                Mendengarkan — jeda 3 detik untuk diproses
+              </p>
+              {conversationHistoryRef.current.length > 0 && (
+                <p className="text-[9px] tracking-[0.08em] text-[#7F77DD]/50 mt-1" style={{ fontFamily: "'DM Mono', monospace" }}>
+                  ronde {Math.ceil(conversationHistoryRef.current.length / 2)} percakapan
+                </p>
+              )}
+            </>
+          )}
+          {phase === 'processing' && (
+            <p className="text-[11px] tracking-[0.1em]" style={{ fontFamily: "'DM Mono', monospace", color: '#7F77DD', animation: 'fadeIn 0.3s ease' }}>
+              {aiLabel}
+            </p>
+          )}
+          {phase === 'responding' && (
+            <p className="text-[11px] tracking-[0.1em] text-[#10b981]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.3s ease' }}>
+              Cenna merespons…
             </p>
           )}
         </div>
       </div>
 
-      <div className="absolute bottom-8 left-0 right-0 flex justify-center z-10">
-        <StatusPill phase={phase} />
+      <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center gap-2 z-10">
+        <StatusPill phase={phase} aiLabel={aiLabel} />
+        {(phase === 'listening' || phase === 'processing' || phase === 'responding') && (
+          <button
+            onClick={handleEndConversation}
+            className="text-[9px] tracking-[0.14em] uppercase text-[#1e2a4a]/25 hover:text-[#1e2a4a]/50 transition-colors"
+            style={{ fontFamily: "'DM Mono', monospace", background: 'none', border: 'none', cursor: 'pointer' }}
+          >
+            Akhiri sesi
+          </button>
+        )}
       </div>
 
       {phase === 'popup' && capturedData && (
-        <DataPopup data={capturedData} onClose={handleClosePopup} onSOAP={handleSOAP} />
+        <DataPopup
+          data={capturedData}
+          onClose={handleClosePopup}
+          onSOAP={handleSOAP}
+          canContinue={conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 10}
+          onContinue={() => { setCapturedData(null); setPhase('listening'); }}
+        />
       )}
 
       <style>{`
@@ -842,6 +1033,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         @keyframes listeningPulse { 0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.08);opacity:0.25} }
         @keyframes fadeIn         { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
         @keyframes popupIn        { from{opacity:0;transform:scale(0.93) translateY(16px)} to{opacity:1;transform:scale(1) translateY(0)} }
+        @keyframes processingDot  { 0%,100%{transform:scale(0.5);opacity:0.3} 50%{transform:scale(1.3);opacity:1} }
+        @keyframes orbProcessing  { 0%{filter:hue-rotate(0deg) brightness(1.1)} 50%{filter:hue-rotate(30deg) brightness(1.25)} 100%{filter:hue-rotate(0deg) brightness(1.1)} }
       `}</style>
     </div>
   );
