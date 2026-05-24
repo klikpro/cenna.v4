@@ -448,21 +448,26 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       alert(`${currentProviderDef.name} API Key wajib diisi.`);
       return;
     }
-    // Simpan API key provider ini ke DB (bukan localStorage)
-    await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
-    // Simpan konfigurasi AI aktif ke DB
-    await sbSetSetting('api_ai_config', {
-      provider: activeProvider,
-      model: aiModel,
-      temperature: aiTemp,
-      maxTokens: aiMaxTokens,
-      keyConfigured: true,
-      updatedAt: new Date().toISOString(),
-    });
-    // Invalidasi cache in-memory agar callActiveAI baca ulang dari DB
-    clearAiConfigCache();
-    addLocalLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
-    alert(`Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
+    try {
+      // Simpan API key provider ini ke DB
+      await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
+      // Simpan konfigurasi AI aktif ke DB
+      await sbSetSetting('api_ai_config', {
+        provider: activeProvider,
+        model: aiModel,
+        temperature: aiTemp,
+        maxTokens: aiMaxTokens,
+        keyConfigured: true,
+        updatedAt: new Date().toISOString(),
+      });
+      // Invalidasi cache in-memory agar callActiveAI baca ulang dari DB
+      clearAiConfigCache();
+      addLocalLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
+      alert(`✅ Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
+    } catch (e: any) {
+      console.error('[handleSaveAI] Error:', e);
+      alert(`❌ Gagal menyimpan ke database!\n\n${e.message}\n\nKemungkinan RLS policy tabel app_settings tidak mengizinkan INSERT/UPDATE. Jalankan SQL ini di Supabase Dashboard:\n\nCREATE POLICY \"allow_auth_write\" ON app_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);\nCREATE POLICY \"allow_anon_read\" ON app_settings FOR SELECT TO anon USING (true);`);
+    }
   };
 
   const handleTestAI = async (pid: string) => {
@@ -493,19 +498,23 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   };
 
   const handleSaveSTT = async () => {
-    // Simpan seluruh STT config ke DB (termasuk API key)
-    await sbSetSetting('api_stt_config', {
-      provider: sttProvider,
-      lang: sttLang,
-      sttKey: sttKey.trim(),
-      keyConfigured: !!sttKey.trim(),
-      updatedAt: new Date().toISOString(),
-    });
-    await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
-    await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
-    await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
-    addLocalLog('success', 'SYSTEM', 'STT config updated.');
-    alert('Konfigurasi Speech-to-Text berhasil disimpan ke database!');
+    try {
+      await sbSetSetting('api_stt_config', {
+        provider: sttProvider,
+        lang: sttLang,
+        sttKey: sttKey.trim(),
+        keyConfigured: !!sttKey.trim(),
+        updatedAt: new Date().toISOString(),
+      });
+      await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
+      await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
+      await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
+      addLocalLog('success', 'SYSTEM', 'STT config updated.');
+      alert('✅ Konfigurasi Speech-to-Text berhasil disimpan ke database!');
+    } catch (e: any) {
+      console.error('[handleSaveSTT] Error:', e);
+      alert(`❌ Gagal menyimpan STT config!\n\n${e.message}`);
+    }
   };
 
   const handleClearDbConfig = async () => {

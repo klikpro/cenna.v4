@@ -255,10 +255,18 @@ export async function sbGetSetting<T>(key: string): Promise<T | null> {
 
 export async function sbSetSetting(key: string, value: unknown): Promise<void> {
   const client = getSupabaseClient();
-  if (!client) return;
-  await client
+  if (!client) {
+    console.warn(`[sbSetSetting] No Supabase client — key: ${key}`);
+    return;
+  }
+  const { error } = await client
     .from('app_settings')
     .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (error) {
+    console.error(`[sbSetSetting] Failed to save key "${key}":`, error.message, error.code);
+    throw new Error(`Gagal menyimpan setting "${key}": ${error.message}`);
+  }
+  console.debug(`[sbSetSetting] Saved key "${key}"`);
 }
 
 /** Debug helper: dump semua key di app_settings ke console. Panggil sekali dari DevTools. */
