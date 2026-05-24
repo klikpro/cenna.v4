@@ -338,10 +338,13 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
   useEffect(() => {
     async function loadSettings() {
-      // ── Supabase bootstrap: tetap dari localStorage (chicken-and-egg) ──
-      setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
-      setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
-      setSupabaseRef(localStorage.getItem('SUPABASE_REF') || 'vtwdgdbxgdmrravpdeix');
+      // ── Supabase bootstrap: baca dari ENV vars, fallback ke DB setting, lalu default ──
+      const envUrl  = import.meta.env.VITE_SUPABASE_URL  as string | undefined;
+      const envAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+      const dbSupaConfig = await sbGetSetting<{ url: string; anonKey: string; ref: string }>('supabase_bootstrap');
+      setSupabaseUrl(envUrl || dbSupaConfig?.url || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
+      setSupabaseAnonKey(envAnon || dbSupaConfig?.anonKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
+      setSupabaseRef(dbSupaConfig?.ref || 'vtwdgdbxgdmrravpdeix');
 
       // ── AI Config: 100% dari Supabase DB ──
       const dbAiConfig = await sbGetSetting<{
@@ -391,17 +394,25 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     if (def) setAiModel(def.defaultModel);
   };
 
-  const handleSaveSupabase = () => {
+  const handleSaveSupabase = async () => {
     if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
       alert('Supabase Project URL dan Anon Key wajib diisi.');
       return;
     }
-    localStorage.setItem('SUPABASE_URL', supabaseUrl.trim());
-    localStorage.setItem('SUPABASE_ANON_KEY', supabaseAnonKey.trim());
-    localStorage.setItem('SUPABASE_REF', supabaseRef.trim());
+    // Simpan ke DB (bukan localStorage). ENV vars tetap prioritas utama saat runtime.
+    await sbSetSetting('supabase_bootstrap', {
+      url: supabaseUrl.trim(),
+      anonKey: supabaseAnonKey.trim(),
+      ref: supabaseRef.trim(),
+      updatedAt: new Date().toISOString(),
+    });
+    // Hapus sisa credentials lama dari localStorage jika ada
+    localStorage.removeItem('SUPABASE_URL');
+    localStorage.removeItem('SUPABASE_ANON_KEY');
+    localStorage.removeItem('SUPABASE_REF');
     setDbStatus('connected');
-    addLocalLog('success', 'SYSTEM', 'Supabase credentials updated locally.');
-    alert('Konfigurasi Supabase database berhasil disimpan!');
+    addLocalLog('success', 'SYSTEM', 'Supabase credentials saved to database.');
+    alert('Konfigurasi Supabase berhasil disimpan ke database! (bukan localStorage)');
     onSettingsSaved();
   };
 
@@ -497,9 +508,10 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     alert('Konfigurasi Speech-to-Text berhasil disimpan ke database!');
   };
 
-  const handleClearDbConfig = () => {
-    if (confirm('Hapus seluruh konfigurasi Supabase?')) {
-      // Supabase credentials tetap di localStorage (bootstrap)
+  const handleClearDbConfig = async () => {
+    if (confirm('Hapus seluruh konfigurasi Supabase tersimpan?')) {
+      await sbSetSetting('supabase_bootstrap', null);
+      // Bersihkan localStorage lama juga
       localStorage.removeItem('SUPABASE_URL');
       localStorage.removeItem('SUPABASE_ANON_KEY');
       localStorage.removeItem('SUPABASE_REF');

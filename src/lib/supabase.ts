@@ -17,9 +17,9 @@ let _client: SupabaseClient | null = null;
 export function getSupabaseClient(): SupabaseClient | null {
   if (_client) return _client;
 
-  // Prefer env vars; fall back to values saved via ApiSettings UI
-  const url  = ENV_URL  || localStorage.getItem('SUPABASE_URL')  || '';
-  const anon = ENV_ANON || localStorage.getItem('SUPABASE_ANON_KEY') || '';
+  // Prefer env vars; fall back to hardcoded default (credentials no longer stored in localStorage)
+  const url  = ENV_URL  || 'https://vtwdgdbxgdmrravpdeix.supabase.co';
+  const anon = ENV_ANON || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk';
 
   if (!url || !anon) return null;
   try {
@@ -33,7 +33,7 @@ export function getSupabaseClient(): SupabaseClient | null {
 
 /** Admin client using service-role key — only available when env var is set */
 export function getAdminClient(): SupabaseClient | null {
-  const url = ENV_URL || localStorage.getItem('SUPABASE_URL') || '';
+  const url = ENV_URL || 'https://vtwdgdbxgdmrravpdeix.supabase.co';
   if (!url || !ENV_SERVICE_ROLE) return null;
   try {
     return createClient(url, ENV_SERVICE_ROLE);
