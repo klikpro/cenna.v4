@@ -18,6 +18,12 @@ export default function Dashboard({ doctors, logs, onNavigate, isDemoMode }: Das
   const trialDocs = doctors.filter((d) => d.status === 'trial').length;
   const totalSoap = doctors.reduce((acc, d) => acc + (d.soap_month || 0), 0);
 
+  // BUG-18 FIX: Hitung dokter baru berdasarkan 30 hari terakhir secara dinamis
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const newDoctorsCount = doctors.filter(
+    (d) => d.created_at && d.created_at >= thirtyDaysAgo
+  ).length;
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Dynamic Demo Alert Banner if using local fallback */}
@@ -47,7 +53,7 @@ export default function Dashboard({ doctors, logs, onNavigate, isDemoMode }: Das
           <div className="flex justify-between items-start mb-3">
             <div className="w-10 h-10 rounded-xl bg-[#1e2a4a]/8 flex items-center justify-center text-lg">👨‍⚕️</div>
             <span className="text-[11px] font-semibold text-[#10b981] bg-[#10b981]/10 px-2 py-1 rounded-full">
-              ↑ {doctors.filter((d) => d.created_at && d.created_at.includes('2025-03')).length} baru
+              {newDoctorsCount > 0 ? `↑ ${newDoctorsCount} baru (30hr)` : 'Tidak ada baru'}
             </span>
           </div>
           <div className="text-3xl font-extrabold text-[#1e2a4a] mb-1 font-mono">{activeDocs}</div>
@@ -61,8 +67,8 @@ export default function Dashboard({ doctors, logs, onNavigate, isDemoMode }: Das
         <div className="bg-white border border-[#1e2a4a]/12 rounded-2xl p-5 hover:shadow-md transition relative overflow-hidden">
           <div className="flex justify-between items-start mb-3">
             <div className="w-10 h-10 rounded-xl bg-[#b8a898]/15 flex items-center justify-center text-lg">📋</div>
-            <span className="text-[11px] font-semibold text-[#10b981] bg-[#10b981]/10 px-2 py-1 rounded-full">
-              ↑ 18% harian
+            <span className="text-[11px] font-semibold text-amber-600 bg-amber-500/10 px-2 py-1 rounded-full" title="Estimasi berdasarkan data historis">
+              Estimasi
             </span>
           </div>
           <div className="text-3xl font-extrabold text-[#131d35] mb-1 font-mono">{totalSoap.toLocaleString('id-ID')}</div>
@@ -81,7 +87,7 @@ export default function Dashboard({ doctors, logs, onNavigate, isDemoMode }: Das
             </span>
           </div>
           <div className="text-3xl font-extrabold text-[#131d35] mb-1 font-mono">98.4%</div>
-          <div className="text-xs text-[#1e2a4a]/50">Rerata Ketepatan AI</div>
+          <div className="text-xs text-[#1e2a4a]/50">Rerata Ketepatan AI <span className="text-[9px] text-amber-500 font-bold">[Estimasi]</span></div>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-[#1e2a4a]/5">
             <div className="h-full bg-[#10b981]" style={{ width: '98%' }} />
           </div>
@@ -96,7 +102,7 @@ export default function Dashboard({ doctors, logs, onNavigate, isDemoMode }: Das
             </span>
           </div>
           <div className="text-3xl font-extrabold text-[#131d35] mb-1 font-mono">247ms</div>
-          <div className="text-xs text-[#1e2a4a]/50">Response Time</div>
+          <div className="text-xs text-[#1e2a4a]/50">Response Time <span className="text-[9px] text-amber-500 font-bold">[Estimasi]</span></div>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-amber-500/5">
             <div className="h-full bg-[#f59e0b]" style={{ width: '30%' }} />
           </div>

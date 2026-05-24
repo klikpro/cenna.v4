@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
-import { addLocalLog, sbGetSetting, sbSetSetting } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbAddLog } from '../lib/supabase';
 import { callActiveAI, AI_PROVIDERS, clearAiConfigCache } from './ApiSettings';
 
 // Pre-seeded sandbox scenarios
@@ -189,13 +189,13 @@ Saat phase \"complete\", isi field \"conclusion\" dengan:
       lang: aiLang,
     };
     await sbSetSetting('ai_behavior', payload);
-    addLocalLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
+    await sbAddLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
     alert('Konfigurasi perilaku klinis berhasil disimpan ke database!');
   };
 
   const handleSaveAnamnesis = async () => {
     await sbSetSetting('prompt_anamnesis', promptAnamnesis);
-    addLocalLog('success', 'SYSTEM', 'Prompt Anamnesis PQRST AI diperbarui.');
+    await sbAddLog('success', 'SYSTEM', 'Prompt Anamnesis PQRST AI diperbarui.');
     alert('Prompt Anamnesis PQRST berhasil disimpan ke database!');
   };
 
@@ -212,7 +212,7 @@ Saat phase \"complete\", isi field \"conclusion\" dengan:
       sbSetSetting('prompt_redflag', promptRedflag),
       sbSetSetting('prompt_medication', promptMedication),
     ]);
-    addLocalLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
+    await sbAddLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
     alert('Seluruh kustomisasi prompt berhasil diperbarui ke database!');
   };
 
@@ -223,7 +223,7 @@ Saat phase \"complete\", isi field \"conclusion\" dengan:
       rules: clinicalRules,
     };
     await sbSetSetting('reasoning_config', payload);
-    addLocalLog('success', 'SYSTEM', 'Mengubah logika reasoning klinis AI.');
+    await sbAddLog('success', 'SYSTEM', 'Mengubah logika reasoning klinis AI.');
     alert('Aturan reasoning engine berhasil diperbarui ke database!');
   };
 
@@ -258,7 +258,7 @@ Saat phase \"complete\", isi field \"conclusion\" dengan:
 
       const result = await callActiveAI(systemPrompt, `${actionPrompt} dari teks kasus berikut:\n\n${sandboxInput}`);
       setSandboxOutput(`[${activeProviderDef.icon} ${activeProviderDef.name} — ${activeModel}]\n${'─'.repeat(55)}\n\n${result}`);
-      addLocalLog('success', 'AI', `Sandbox test berhasil via ${activeProviderDef.name}.`);
+      await sbAddLog('success', 'AI', `Sandbox test berhasil via ${activeProviderDef.name}.`);
     } catch (e: any) {
       // Fallback simulasi jika provider belum dikonfigurasi
       if (e.message?.includes('belum dikonfigurasi') || e.message?.includes('API Key')) {

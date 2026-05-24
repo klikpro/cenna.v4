@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { getSupabaseClient, addLocalLog, sbSetSetting, sbGetSetting } from '../lib/supabase';
+import { getSupabaseClient, sbSetSetting, sbGetSetting, sbAddLog } from '../lib/supabase';
 import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './LandingPage';
 
 interface ApiSettingsProps {
@@ -404,9 +404,10 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       const envUrl  = import.meta.env.VITE_SUPABASE_URL  as string | undefined;
       const envAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
       const dbSupaConfig = await sbGetSetting<{ url: string; anonKey: string; ref: string }>('supabase_bootstrap');
-      setSupabaseUrl(envUrl || dbSupaConfig?.url || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
-      setSupabaseAnonKey(envAnon || dbSupaConfig?.anonKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
-      setSupabaseRef(dbSupaConfig?.ref || 'vtwdgdbxgdmrravpdeix');
+      // BUG-01 FIX: Tidak ada hardcoded credentials — hanya ENV vars atau DB config
+      setSupabaseUrl(envUrl || dbSupaConfig?.url || '');
+      setSupabaseAnonKey(envAnon || dbSupaConfig?.anonKey || '');
+      setSupabaseRef(dbSupaConfig?.ref || '');
 
       // ── AI Config: 100% dari Supabase DB ──
       const dbAiConfig = await sbGetSetting<{
@@ -488,7 +489,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     localStorage.removeItem('SUPABASE_ANON_KEY');
     localStorage.removeItem('SUPABASE_REF');
     setDbStatus('connected');
-    addLocalLog('success', 'SYSTEM', 'Supabase credentials saved to database.');
+    await sbAddLog('success', 'SYSTEM', 'Supabase credentials saved to database.');
     alert('Konfigurasi Supabase berhasil disimpan ke database! (bukan localStorage)');
     onSettingsSaved();
   };
@@ -506,7 +507,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         headers: { apikey: supabaseAnonKey.trim() },
       });
       const latency = Date.now() - start;
-      if (res.ok || res.status === 200) {
+      if (res.ok) {
         setDbStatus('connected');
         alert(`Koneksi Supabase Sukses! Latency: ${latency}ms`);
       } else {
@@ -539,7 +540,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       });
       // Invalidasi cache in-memory agar callActiveAI baca ulang dari DB
       clearAiConfigCache();
-      addLocalLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
+      await sbAddLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
       alert(`✅ Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
     } catch (e: any) {
       console.error('[handleSaveAI] Error:', e);
@@ -602,7 +603,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
       // Preferred TTS provider
       await sbSetSetting('tts_provider', ttsPrefProvider);
-      addLocalLog('success', 'SYSTEM', `STT/TTS config updated. TTS utama: ${ttsPrefProvider}.`);
+      await sbAddLog('success', 'SYSTEM', `STT/TTS config updated. TTS utama: ${ttsPrefProvider}.`);
       alert('✅ Konfigurasi Speech/TTS berhasil disimpan ke database!');
     } catch (e: any) {
       console.error('[handleSaveSTT] Error:', e);

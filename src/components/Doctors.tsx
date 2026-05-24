@@ -86,8 +86,10 @@ export default function Doctors({ doctors, onSaveDoctor, onDeleteDoctor }: Docto
       setErrorMsg('Nama lengkap wajib diisi.');
       return;
     }
-    if (!formEmail.trim() || !formEmail.includes('@')) {
-      setErrorMsg('Email valid wajib diisi.');
+    // BUG-09 FIX: Validasi email menggunakan regex standar, bukan hanya includes('@')
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!formEmail.trim() || !emailRegex.test(formEmail.trim())) {
+      setErrorMsg('Masukkan alamat email yang valid (contoh: dokter@rumahsakit.id).');
       return;
     }
 

@@ -1191,6 +1191,12 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     firedRef.current = true;
     console.log('[Cenna] wake word! → speaking');
 
+    // BUG-02 FIX: Reset state anamnesis module-level di awal setiap sesi baru
+    // agar data pasien sebelumnya tidak bocor ke sesi berikutnya
+    resetAnamnesisState();
+    conversationHistoryRef.current = [];
+    sessionDataRef.current = [];
+
     setWakeFlash(true);
     setTimeout(() => setWakeFlash(false), 900);
     setPhase('speaking');

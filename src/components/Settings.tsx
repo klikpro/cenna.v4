@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { PlatformSettings, NotificationSettings, BrandingSettings } from '../types';
-import { sbGetSetting, sbSetSetting, sbAddLog } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbAddLog, sbSignOut, getSupabaseClient } from '../lib/supabase';
 
 interface SettingsProps {
   onAdminProfileUpdated: (name: string) => void;
@@ -22,6 +22,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
 
   // 2. Profile states
   const [adminName, setAdminName] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');  // BUG-12 FIX: dari sesi aktual
   const [adminPass, setAdminPass] = useState('');
   const [adminPassConfirm, setAdminPassConfirm] = useState('');
 
@@ -61,6 +62,12 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       if (session) {
         try { setAdminName(JSON.parse(session).name || ''); } catch (e) {}
       }
+      // BUG-12 FIX: Baca email dari Supabase session aktual, bukan hardcoded
+      const client = getSupabaseClient();
+      if (client) {
+        const { data: { user } } = await client.auth.getUser();
+        if (user?.email) setAdminEmail(user.email);
+      }
     }
     loadSettings();
   }, []);
@@ -89,9 +96,28 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       alert('Konfirmasi sandi rahasia tidak cocok.');
       return;
     }
+    if (adminPass && adminPass.length < 8) {
+      alert('Password baru minimal 8 karakter.');
+      return;
+    }
+
+    // BUG-04 FIX: Implementasi perubahan password via Supabase Auth API
+    if (adminPass) {
+      const client = getSupabaseClient();
+      if (!client) {
+        alert('Tidak dapat terhubung ke Supabase. Periksa konfigurasi API.');
+        return;
+      }
+      const { error } = await client.auth.updateUser({ password: adminPass });
+      if (error) {
+        alert(`Gagal mengubah password: ${error.message}`);
+        return;
+      }
+    }
+
     onAdminProfileUpdated(adminName.trim());
-    await sbAddLog('success', 'SYSTEM', 'Admin profile parameters modified.');
-    alert('Akun profil administrator diperbarui!');
+    await sbAddLog('success', 'SYSTEM', `Admin profile diperbarui${adminPass ? ' (termasuk password)' : ''}.`);
+    alert(adminPass ? 'Profil dan password berhasil diperbarui!' : 'Akun profil administrator diperbarui!');
     setAdminPass('');
     setAdminPassConfirm('');
   };
@@ -138,8 +164,10 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
     }
   };
 
-  const handleClearCache = () => {
+  const handleClearCache = async () => {
     if (confirm('Yakin ingin membersihkan seluruh data simpanan browser? Semua setting API Anda harus diketik ulang.')) {
+      // BUG-05 FIX: Revoke sesi Supabase di server sebelum menghapus local storage
+      await sbSignOut();
       localStorage.clear();
       alert('Local storage berhasil dibersihkan! Mulai ulang halaman...');
       window.location.reload();
@@ -294,9 +322,11 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
                   id="settings-admin-email"
                   type="email"
                   disabled
-                  value="admin@cennaai.id"
+                  value={adminEmail || '(Memuat...)'}
+                  title="Email tidak dapat diubah dari sini — gunakan panel Supabase Auth"
                   className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs text-gray-500 outline-none cursor-not-allowed"
                 />
+                <p className="text-[9px] text-slate-400">Email hanya dapat diubah melalui panel Supabase Authentication.</p>
               </div>
 
               <div className="space-y-1">

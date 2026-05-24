@@ -325,7 +325,7 @@ export default function App() {
         {/* Sidebar avatar info footer */}
         <div className="p-4 border-t border-white/5 space-y-2 bg-[#121c33]">
           <div className="flex items-center gap-3">
-            <div className="w-[34px] height-[34px] rounded-full bg-slate-100 flex items-center justify-center font-bold text-[#1e2a4a] text-xs">
+            <div className="w-[34px] h-[34px] rounded-full bg-slate-100 flex items-center justify-center font-bold text-[#1e2a4a] text-xs">
               {avatarInitials}
             </div>
             <div className="min-w-0">
@@ -371,8 +371,9 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button
               id="btn-topbar-pill-home"
-              onClick={() => {
-                sessionStorage.removeItem('cenna_admin');
+              onClick={async () => {
+                // BUG-08 FIX: Revoke sesi Supabase sebelum reset state lokal
+                await sbSignOut();
                 setAdminSession(null);
                 setPage('landing');
               }}

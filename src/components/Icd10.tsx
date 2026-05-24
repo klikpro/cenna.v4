@@ -102,7 +102,7 @@ export default function Icd10({ icdCodes, onSaveIcd, onDeleteIcd, onImportCodes 
     handleCancelEdit();
   };
 
-  // CSV Import file parser
+  // CSV Import file parser — BUG-14 FIX: parser yang lebih robust
   const handleCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -112,29 +112,75 @@ export default function Icd10({ icdCodes, onSaveIcd, onDeleteIcd, onImportCodes 
       const text = evt.target?.result as string;
       if (!text) return;
 
-      const lines = text.split('\n').filter((l) => l.trim().length > 0);
+      // BUG-14 FIX: Tangani CRLF (Windows) dan LF (Unix)
+      const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter((l) => l.trim().length > 0);
       const parsed: IcdCode[] = [];
 
-      // Skip header assuming csv columns: code,name_id,name_lat,chapter
-      for (let i = 1; i < lines.length; i++) {
-        const parts = lines[i].split(',').map((p) => p.replace(/"/g, '').trim());
-        if (parts.length >= 2 && parts[0] && parts[1]) {
-          parsed.push({
-            id: 'icd_csv_' + Date.now() + Math.random().toString(36).substring(2, 5),
-            code: parts[0].toUpperCase(),
-            name_id: parts[1],
-            name_lat: parts[2] || undefined,
-            chapter: parts[3] || 'XVIII',
-            freq: 0,
-            custom: true,
-          });
+      /**
+       * BUG-14 FIX: Parser CSV yang menangani field bertanda kutip mengandung koma.
+       * Contoh: `J06.9,"Infeksi, akut",Acute infection,X`
+       */
+      function parseCSVLine(line: string): string[] {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+            else { inQuotes = !inQuotes; }
+          } else if (ch === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += ch;
+          }
         }
+        result.push(current.trim());
+        return result;
       }
+
+      // Validasi format kode ICD-10: huruf kapital diikuti angka (A00–Z99)
+      const icdCodeRegex = /^[A-Z]\d{2}(\.\d{0,4})?$/;
+
+      // Skip baris header (baris pertama)
+      for (let i = 1; i < lines.length; i++) {
+        const parts = parseCSVLine(lines[i]);
+        const rawCode = (parts[0] || '').toUpperCase().replace(/"/g, '').trim();
+        const nameId  = (parts[1] || '').replace(/"/g, '').trim();
+
+        if (!rawCode || !nameId) continue;
+
+        // BUG-14 FIX: Validasi format kode ICD-10
+        if (!icdCodeRegex.test(rawCode)) {
+          console.warn(`[ICD Import] Kode tidak valid, baris ${i + 1}: "${rawCode}" — dilewati.`);
+          continue;
+        }
+
+        parsed.push({
+          // BUG-10 FIX: Gunakan index + timestamp untuk ID unik, hindari collision
+          id: `icd_csv_${Date.now()}_${i}`,
+          code: rawCode,
+          name_id: nameId,
+          name_lat: (parts[2] || '').replace(/"/g, '').trim() || undefined,
+          chapter:  (parts[3] || '').replace(/"/g, '').trim() || 'XVIII',
+          freq: 0,
+          custom: true,
+        });
+      }
+
       if (parsed.length > 0) {
         onImportCodes(parsed);
+        // BUG-10 FIX: Reset ke halaman 1 setelah import agar data baru terlihat
+        setCurrentPage(1);
+        alert(`Berhasil mengimpor ${parsed.length} kode ICD-10.${lines.length - 1 - parsed.length > 0 ? ` (${lines.length - 1 - parsed.length} baris dilewati karena format tidak valid)` : ''}`);
+      } else {
+        alert('Tidak ada kode valid yang dapat diimpor. Periksa format file CSV Anda.');
       }
     };
-    reader.readAsText(file);
+    reader.readAsText(file, 'UTF-8');
+    // Reset input agar file yang sama bisa dipilih ulang
+    e.target.value = '';
   };
 
   return (

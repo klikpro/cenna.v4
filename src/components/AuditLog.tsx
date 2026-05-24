@@ -209,7 +209,14 @@ export default function AuditLog({ logs, onClearLogs }: AuditLogProps) {
                           <p className="font-bold text-slate-700">Metadata Event Payload (Raw JSON):</p>
                           <pre className="p-3 bg-[#0d1a36] text-[#94a8d8] rounded-lg font-mono overflow-auto max-h-48 text-[10px]">
                             {log.detail
-                              ? JSON.stringify(JSON.parse(log.detail), null, 2)
+                              ? (() => {
+                                  try {
+                                    return JSON.stringify(JSON.parse(log.detail), null, 2);
+                                  } catch {
+                                    // Jika bukan JSON valid, tampilkan raw string apa adanya
+                                    return log.detail;
+                                  }
+                                })()
                               : '{\n  "status": "Tidak ada detail parameter tambahan terlampir."\n}'}
                           </pre>
                         </div>

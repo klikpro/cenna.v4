@@ -316,7 +316,12 @@ export default function Drugs({ drugs, onSaveDrug, onDeleteDrug }: DrugsProps) {
                           </button>
                           <button
                             id={`btn-delete-drug-${d.id}`}
-                            onClick={() => onDeleteDrug(d.id)}
+                            onClick={() => {
+                              // BUG-03 FIX: Konfirmasi sebelum hapus obat permanen
+                              if (confirm(`Hapus obat "${d.generic}" dari formularium? Tindakan ini tidak dapat dibatalkan.`)) {
+                                onDeleteDrug(d.id);
+                              }
+                            }}
                             className="w-7 h-7 rounded bg-red-400/10 hover:bg-red-400/20 text-red-600 border-none cursor-pointer flex items-center justify-center text-xs"
                           >
                             🗑
