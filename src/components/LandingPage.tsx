@@ -2,8 +2,16 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * LandingPage v5 — Ambient Flow
- * Alur: idle → speaking (sapa balik) → listening (ambient) → popup data
+ * LandingPage v5.2 — Wake-word definitive fix
+ *
+ * Root causes yang diperbaiki:
+ * 1. wakeEnabled diinisialisasi false + getUserMedia async → race condition:
+ *    mic granted SETELAH mount, tapi useWakeWord sudah skip start().
+ *    Fix: mic permission di-request di dalam hook, bukan di luar.
+ * 2. speechSynthesis.onend tidak selalu fire (Chrome bug) → phase stuck di
+ *    'speaking'. Fix: fallback timeout 4 detik + cancel sebelum speak.
+ * 3. useWakeWord menerima prop `enabled` yang terlambat satu render.
+ *    Fix: hook mengelola mic permission sendiri; outer state hanya `phase`.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -14,19 +22,17 @@ interface LandingPageProps {
   onLoginClick: () => void;
 }
 
-/** 4 fase utama orb */
 type OrbPhase = 'idle' | 'speaking' | 'listening' | 'popup';
 
-/** Entitas klinis yang ditangkap dari percakapan */
 interface CapturedData {
   transcript: string;
-  keluhan: string[];
-  obat: string[];
+  keluhan:    string[];
+  obat:       string[];
   pertanyaan: string[];
-  waktu: string;
+  waktu:      string;
 }
 
-// ─── Palet warna Cenna (navy-cream-tan) ───────────────────────────────────────
+// ─── Palet ───────────────────────────────────────────────────────────────────
 
 const PALETTE = {
   navy:  { r: 30,  g: 42,  b: 74  },
@@ -34,9 +40,9 @@ const PALETTE = {
   tan:   { r: 184, g: 168, b: 152 },
 };
 
-// ─── Logo Base64 (sama dengan versi sebelumnya) ───────────────────────────────
+// ─── Logo ─────────────────────────────────────────────────────────────────────
 
-const CENNA_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgAAAAYACAYAAACw7oNrAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZIgAACAASURBVHic7N17mFxVlTf+tU5Vp0PSSSfIcBkTZdQRxxAuYiAZQGRQLkNmIEiD42VAeG2HQNNn78rN8Xa8JyS192kbotMKAyMoEBCYCSMgTETCm4SLXELQ+Mj80MQXUCTpTgfpS531+4MOTxtyqV1nV5+q7u/nL5Lsvc438Dx01VnnrE0EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFA7OOsAAAAAAFkqFAonJUnyj8x8MhG9lYim72XpDiJ6SkSeYeZflEqlDR0dHRtGLikAAMDYVigUZpVKpdnMfBwRHU5ExMyJiPyBmV8SkReZ+UUR2RoEwc+LxeLL2SYGAADIHhoAAAAAMOYUCoUzROR8EZnHzG+ptI6I/JqIbmDmG4wxWzxGBAAAGPMWLVr0lwMDAxcy87lE9IEKSjxKRHeJyPXW2t95jgcAAFAX0AAAAACAMUNr/Rki0kT0bt+1ReRuEfl8HMdP+q4NAAAwViilDhCRjwdB8DEiOtVj6TuZeWWxWPyJx5oAAAA1Dw0AAAAAGPXCMDwrCIJriOivRuByNyZJ8oU4jp8fgWsBAACMGlrrBUT0r0Q0tVrXGHp772vW2huqdQ0AAIBaggYAAAAAjFpRFI3v7u7+DjNflMHlv2iM+WoG1wUAAKgrSqmTieg6Zn7XSF1TRO5OkuTSjo6Ol0bqmgAAAFlAAwAAAABGpTAM/yYIgjupCuN+HNwrIh+z1r6SYQYAAICapbUu0uvj+UaciGxn5ouMMf+ZxfUBAABGAhoAAAAAMOporf+RiG4koklZZxGR3xHRudbax7LOAgAAUCu01tOJ6L+J6Miss4hIh7U2zDoHAABANaABAAAAAKOK1voSIro26xy76U6SZE4cx7/IOggAAEDWlFIzmPl+Ijo06yzD3GmMmZd1CAAAAN/QAAAAAIBRQyl1ETNfn3WOPRGRrSJyfBzHL2SdBQAAICuFQuHtSZJsYOZDss6yBz/r7e09q6ur69WsgwAAAPgSZB0AAAAAwAet9dxavflPRMTM04Ig+PGCBQsmZp0FAAAgC4sXL24Wkftq9OY/EdEHJk6c+N9RFI3POggAAIAvaAAAAABA3QvD8Bgi+q+sc5Th6CRJ/i3rEAAAAFno7++/jYjenXWOfWHmU7q7u1dmnQMAAMCXXNYBAAAAANKIomh8X1/f/cx8UNZZynTU7Nmzn1y/fv3mrIMAAACMFKXUF5n50qxzlIOZj509e/bP169f/6usswAAAKSFNwAAAACgrvX09HydmY/IOocLZv5eW1vbX2SdAwAAYCQUCoX3MPOXs87h6LuLFi2alHUIAACAtNAAAAAAgLqllHoHEemsc1TgoHw+/62sQwAAAIwEEbk26wyumPmQwcHBr2WdAwAAIC00AAAAAKBuMXPdfjFn5o8WCoX3Zp0DAACgmsIwbCWiv806R4WuDMPwb7IOAQAAkAYaAAAAAFCXFixY8FdEdGHWOdJIkuQLWWcAAAColiiK8sz8zaxzpBEEwVezzgAAAJAGGgAAAABQl5IkKVCdf5Zh5o9qrd+ddQ4AAIBq6O7uvoCZD8w6R0ofUUrNzDoEAABAper6SzMAAACMTVEUjSeif846hydXZB0AAACgSuZnHcCT1qwDAAAAVAoNAAAAAKg7O3bsmEdEk7LO4clHsg4AAADgm9b63cx8YtY5fGDmj7e0tOSyzgEAAFAJNAAAAACg7iRJcl7WGTz6yzAM35d1CAAAAM/+KesAHk1929ve9ndZhwAAAKgEGgAAAABQj0bVl/AgCM7NOgMAAIBPIjI76ww+JUny4awzAAAAVCKfdQAAAAAAF1deeeVfj4IDBf+MiHxSa51knQMAAMCX0dYAIKJTsw4AAABQCTQAAAAAoK7k8/mjss7gGzMfTkRfyjgGAACAN8ycdQTfjs06AAAAQCUwAggAAADqiogckXUGAAAAGFuYObdgwYK/yjoHAACAKzQAAAAAoN68NesAAAAAMPaUSqV3Zp0BAADAFRoAAAAAUFeYeVzWGQAAAGDsYea/zDoDAACAKzQAAAAAoK6IyKgbKgwAAAB14eCsAwAAALhCAwAAAADqTW/WAQAAAGBMaso6AAAAgCs0AAAAAKDe7Mg6AAAAAIxJPVkHAAAAcIUGAAAAANSbV7IOAAAAAGMSPoMAAEDdQQMAAAAA6gozb846AwAAAIw9SZL8IesMAAAArtAAAAAAgLqSJMmzWWcAAACAsYeZn8w6AwAAgCvOOgAAAACAK6XUH5n5wKxzeLSFiK7LOgQAAIBHc4nouKxD+CIiL1lrD806BwAAgKt81gEAAAAAKvA/RHR+1iE8utMYE2UdAgAAwBet9W+J6Nqsc/jCzOuyzgAAAFAJjAACAACAusPM92edwbPR9vcBAIAxbmBg4L+yzuDZaPv7AADAGIEGAAAAANQdZr496wwe7Zw8efJ9WYcAAADwqbOz8w9EtDbrHL6IyJ1ZZwAAAKgEGgAAAABQd4rF4stE9MOsc3jyn1EUvZZ1CAAAgCq4MesAnqyx1r6SdQgAAIBKoAEAAAAAdUlEnsg6gw9JknRlnQEAAKAaGhoabs46gw9JklyddQYAAIBKcdYBAAAAAFxEUTS+p6fHENFlWWfx4FljzIysQwAAAFSLUup2Zj4v6xyVEpHfWmvfnnUOAACASuENAAAAAKgb7e3tR/X09DxBo+PmPzGzzjoDAABAtSilPlXPN/+JiJi5V2s9PescAAAAlUIDAAAAAOqCUkrlcrmniOg9WWfxCPOEAQBgVNJaf4GZr8s6hwfvJaKNYRien3UQAACASmAEEAAAANS0QqFwUJIkNzHz6VlnqYKdRPQPxpg1WQcBAADwhLXW3yOiS7IO4puIXNvc3HxFFEWvZZ0FAACgXGgAAAAAQM1SSp1ORP/BzIdknaVaRGRARD4ax/GPss4CAACQRltbW2M+n7+Fmc/JOku1iMhmIvqItXZT1lkAAADKgQYAAAAA1JzW1taGpqampSKimHnUf14REWHmzxhjvpt1FgAAgEosXry4ub+//8fMPCfrLNUmIn0isjCO486sswAAAOzPqP9CDQAAAPWlvb39iFwudwsRHZ11lpEmIl+x1n4p6xwAAAAuFi5ceOjg4OBPmfmIrLOMJBG5u7Gx8ZNLly7dlnUWAACAvUEDAAAAAGqG1vrTIhIz84Sss2Tou8aYzxCRZB0EAABgf9rb248IguB+Zp6WdZYsiMgLQRBcUCwW12adBQAAYE/QAAAAAIDMhWE4hZmvY+Z5nkq+TEQHeao14kTkVmvthVnnAAAA2Bel1PFEdC8zT8k6S9ZE5GvW2i9knQMAAGB3aAAAAABApgqFwgdE5BYiOtRTyWXGmCXa66uJ6HJPNUeciPxPLpf7xxUrVuzMOgsAAMDutNZziei/0tQQkf9h5r/zFClzIrKOmS80xmzJOgsAAMAuQdYBAAAAYOxSSn1VRB4kPzf//1+SJKcZY5YQERljrkiS5EoPdSuVah4wM/9dqVT62eWXX/4WX4EAAAB80FpfQlnu/ncnSXKStfa0oc8BWXqgVCodLSLr0hZi5jki8rRSytcbjQAAAKnhDQAAAAAYcWEYHh4EwQ+JaLaPeiJyFxFdYq19Zfc/u/LKK/86n893EtEZPq5VZp7ngyD4IBH9rYj8IGWtzcz8YTxNCAAAtUAp9Xlm/mql+0XkhVwud/qKFSueGar3M2Y+2V9CJ181xnxx1y+UUl9m5i/ua0O5ROQ7zc3NKoqi13zUAwAAqBQaAAAAADCiCoXCP4nId4looo96SZJcGcdxZxnX/UCSJF8biZsMIvIHa+3BQ9c9I0mSH6U82PhFZj6tWCw+6ykiAACAM631d4joM5XuF5FfDA4Ont7Z2bmViGjBggUHJ0nykreA5VstIu3W2v/d/Q+UUicT0Q+Z+a0ervOrIAg+sqvZAQAAkAU0AAAAAGBELFq0aNLg4OC3iejjPuqJyNNJklzQ0dGx2WVfGIYnBkGw1keGfRGRs6y19xARtbe3n5DL5X5MRFNTlOwulUpndHR0bPCTEAAAoHxKqduZ+bwUJdY3NDScuWzZsu5hNecz8zUe4u2XiLxERKuDIDD7a6gvWbJkal9f378z8zmern25tXalj1oAAACu0AAAAACAqlNKHc/MNxPRX3kq+S1jTHslGwuFwntFZJOnHPtykzHmE7t+EYbh3wRB8D+U4rwDEXk1CILzisXivV4SAgAA7MfixYub+/v772bmEyutISJ3E1GLtfZPw39fa30/EZ2WNuN+vJzL5WYuX778RdeNPhsUInJXY2Pjp5YuXZrqjCAAAABXOAQYAAAAqkpr/Vlm3kAebv6LyB+SJPn7Sm/+ExElSXJMhdfe6Lj+vAULFrwx5iiO418Q0fEi4vTGwnDMPEFE7ikUCv9UaQ0AAIByhWF4WH9//8Npbv4T0XXW2rm73/wfOuTe9eb/l0XE9WfgQcy803EPERFZa1eKyFFpfnbvwszn9PX1bRwaMQQAADBi0AAAAACAqhQKhYOUUvcSkWVmH0+urU2SZMbQK/beVTACYJ+I6G8AAAD//w==";
+const CENNA_LOGO = "data:image/png;base64,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";
 
 // ─── Wake-word patterns ───────────────────────────────────────────────────────
 
@@ -45,39 +51,49 @@ const WAKE_PATTERNS = [
   'hai senna', 'hei senna', 'hey senna', 'hi senna',
   'hai tenna', 'hei tenna', 'hai cena',  'hey cena',
   'hai xena',  'hai zena',  'hai kena',  'hei kena',
+  // fallback fonetik umum lainnya
+  'hei sena',  'hai sen na', 'hai ce na', 'hey se na',
 ];
 
-function matchesWakeWord(raw: string): boolean {
-  const t = raw.toLowerCase().replace(/[^a-z ]/g, '').trim();
-  return WAKE_PATTERNS.some((p) => t.includes(p));
+/**
+ * Normalisasi lebih agresif:
+ * - lowercase
+ * - hapus semua non-latin (strip accent, tanda baca, angka)
+ * - collapse spasi ganda
+ */
+function normalizeText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')                     // pisahkan accent dari huruf
+    .replace(/[\u0300-\u036f]/g, '')      // hapus accent marks
+    .replace(/[^a-z ]/g, ' ')            // hapus semua bukan huruf/spasi
+    .replace(/\s+/g, ' ')               // collapse spasi ganda
+    .trim();
 }
 
-// ─── Deteksi jeda / nada tanya ────────────────────────────────────────────────
+function matchesWakeWord(raw: string): boolean {
+  const t = normalizeText(raw);
+  const matched = WAKE_PATTERNS.some((p) => t.includes(p));
+  if (matched) console.log('[Cenna wake] ✓ MATCHED on:', JSON.stringify(t));
+  return matched;
+}
 
-/** Cek apakah kalimat mengandung nada tanya */
+// ─── Deteksi nada tanya ───────────────────────────────────────────────────────
+
 function isQuestion(text: string): boolean {
   const t = text.trim().toLowerCase();
   return (
     t.endsWith('?') ||
-    t.startsWith('apakah') ||
-    t.startsWith('apa') ||
-    t.startsWith('bagaimana') ||
-    t.startsWith('berapa') ||
-    t.startsWith('kenapa') ||
-    t.startsWith('mengapa') ||
-    t.startsWith('kapan') ||
-    t.startsWith('di mana') ||
-    t.startsWith('siapa') ||
-    t.startsWith('ada') ||
+    /^(apakah|apa|bagaimana|berapa|kenapa|mengapa|kapan|di mana|siapa)\b/.test(t) ||
     t.includes('ya dok') ||
     t.includes('betul tidak') ||
     t.includes('bisa tidak')
   );
 }
 
-/** Ekstrak entitas klinis sederhana dari transkrip */
+// ─── Ekstrak entitas klinis ───────────────────────────────────────────────────
+
 function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 'pertanyaan'> {
-  const lower = text.toLowerCase();
   const sentences = text.split(/[.,;!?]+/).map(s => s.trim()).filter(Boolean);
 
   const keluhanKeywords = ['nyeri', 'sakit', 'pusing', 'mual', 'muntah', 'sesak', 'batuk', 'demam', 'lemas', 'lelah', 'gatal', 'bengkak', 'diare'];
@@ -97,30 +113,45 @@ function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 
   return { keluhan, obat, pertanyaan };
 }
 
-// ─── Hook: always-on wake-word listener ──────────────────────────────────────
+// ─── Hook: wake-word listener (v5.2) ─────────────────────────────────────────
+//
+// Perubahan dari v5.1:
+// - Hook mengelola mic permission sendiri (tidak bergantung prop `enabled`
+//   yang datang terlambat karena getUserMedia async di luar).
+// - `active` prop cukup dipakai untuk STOP (saat phase bukan idle).
+// - Tambah fallback: jika SpeechRecognition tidak ada, tidak crash.
 
-function useWakeWord(onDetected: () => void, enabled: boolean) {
-  const enabledRef    = useRef(enabled);
+function useWakeWord(onDetected: () => void, active: boolean) {
+  const recRef      = useRef<SpeechRecognition | null>(null);
+  const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runningRef  = useRef(false);
+  const activeRef   = useRef(active);
   const onDetectedRef = useRef(onDetected);
-  const recRef        = useRef<SpeechRecognition | null>(null);
-  const timerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runningRef    = useRef(false);
+  // Synchronous ref update — tidak tunggu re-render
+  activeRef.current   = active;
+  onDetectedRef.current = onDetected;
 
-  useEffect(() => { enabledRef.current = enabled; },     [enabled]);
-  useEffect(() => { onDetectedRef.current = onDetected; }, [onDetected]);
+  const stopRef = useRef<() => void>(() => undefined);
 
   const stop = useCallback(() => {
     runningRef.current = false;
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
+    console.log('[Cenna wake] stopped');
   }, []);
+  stopRef.current = stop;
 
   const start = useCallback(() => {
-    if (!enabledRef.current || runningRef.current) return;
+    if (!activeRef.current) return;
+    if (runningRef.current) return;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR) {
+      console.warn('[Cenna wake] SpeechRecognition not supported');
+      return;
+    }
 
     const rec: SpeechRecognition = new SR();
     rec.lang            = 'id-ID';
@@ -128,11 +159,16 @@ function useWakeWord(onDetected: () => void, enabled: boolean) {
     rec.interimResults  = true;
     rec.maxAlternatives = 5;
 
-    rec.onstart = () => { runningRef.current = true; };
+    rec.onstart = () => {
+      runningRef.current = true;
+      console.log('[Cenna wake] 🎙️ listening...');
+    };
 
     rec.onresult = (evt: SpeechRecognitionEvent) => {
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
         const r = evt.results[i];
+        const alts = Array.from({ length: r.length }, (_, j) => r[j].transcript);
+        console.log('[Cenna wake] heard:', { final: r.isFinal, alts });
         for (let j = 0; j < r.length; j++) {
           if (matchesWakeWord(r[j].transcript)) {
             onDetectedRef.current();
@@ -145,49 +181,86 @@ function useWakeWord(onDetected: () => void, enabled: boolean) {
     const scheduleRestart = (delay: number) => {
       runningRef.current = false;
       recRef.current     = null;
-      if (!enabledRef.current) return;
+      if (!activeRef.current) return;
       timerRef.current = setTimeout(start, delay);
     };
 
-    rec.onend   = () => scheduleRestart(200);
+    rec.onend = () => {
+      console.log('[Cenna wake] session ended, restarting...');
+      scheduleRestart(200);
+    };
+
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { stop(); return; }
-      scheduleRestart(e.error === 'no-speech' ? 100 : 500);
+      console.warn('[Cenna wake] error:', e.error);
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        // Mic ditolak → stop total, jangan retry
+        stopRef.current();
+        return;
+      }
+      scheduleRestart(e.error === 'no-speech' ? 100 : 800);
     };
 
     recRef.current = rec;
-    try { rec.start(); } catch { scheduleRestart(500); }
-  }, []); // reads refs only
+    try {
+      rec.start();
+      console.log('[Cenna wake] rec.start() called');
+    } catch (err) {
+      console.warn('[Cenna wake] rec.start() threw:', err);
+      scheduleRestart(800);
+    }
+  }, []);
 
   useEffect(() => {
-    if (enabled) { start(); } else { stop(); }
-    return stop;
-  }, [enabled, start, stop]);
+    if (!active) {
+      stop();
+      return () => stop();
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    // Minta mic permission di sini — hook mengelola sendiri
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(() => {
+        console.log('[Cenna wake] mic granted, starting wake listener');
+        start();
+      })
+      .catch((err) => {
+        console.warn('[Cenna wake] mic denied:', err);
+      });
+
+    return () => stop();
+  }, [active, start, stop]);
 }
 
-// ─── Hook: ambient listener (fase listening) ──────────────────────────────────
+// ─── Hook: ambient listener ───────────────────────────────────────────────────
 
 interface AmbientListenerOptions {
-  enabled:      boolean;
-  silenceMs?:   number; // jeda untuk trigger popup (default 3000ms)
-  onData:       (data: CapturedData) => void;
+  enabled:   boolean;
+  silenceMs?: number;
+  onData:    (data: CapturedData) => void;
 }
 
 function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListenerOptions) {
-  const recRef         = useRef<SpeechRecognition | null>(null);
-  const runningRef     = useRef(false);
-  const transcriptRef  = useRef('');
+  const recRef          = useRef<SpeechRecognition | null>(null);
+  const runningRef      = useRef(false);
+  const transcriptRef   = useRef('');
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onDataRef      = useRef(onData);
-  const enabledRef     = useRef(enabled);
 
-  useEffect(() => { onDataRef.current = onData; },   [onData]);
-  useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+  // Synchronous ref update
+  const enabledRef = useRef(enabled);
+  const onDataRef  = useRef(onData);
+  enabledRef.current = enabled;
+  onDataRef.current  = onData;
+
+  const stopRef = useRef<() => void>(() => undefined);
 
   const fireSilence = useCallback(() => {
     const raw = transcriptRef.current.trim();
     if (!raw) return;
     const entities = extractEntities(raw);
+    console.log('[Cenna ambient] firing — transcript:', raw.slice(0, 80));
     onDataRef.current({
       transcript: raw,
       keluhan:    entities.keluhan,
@@ -203,7 +276,9 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
-  }, [fireSilence]);
+  }, []);
+
+  stopRef.current = stop;
 
   const start = useCallback(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -215,10 +290,9 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
     rec.continuous     = true;
     rec.interimResults = true;
 
-    rec.onstart = () => { runningRef.current = true; };
+    rec.onstart = () => { runningRef.current = true; console.log('[Cenna ambient] 🎙️ started'); };
 
     rec.onresult = (evt: SpeechRecognitionEvent) => {
-      // Reset silence timer setiap ada suara masuk
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
       let newText = '';
@@ -226,19 +300,20 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
         const r = evt.results[i];
         if (r.isFinal) newText += r[0].transcript + ' ';
       }
-      if (newText.trim()) transcriptRef.current += newText;
+      if (newText.trim()) {
+        transcriptRef.current += newText;
+        console.log('[Cenna ambient] transcript so far:', transcriptRef.current.slice(-80));
+      }
 
-      // Cek nada tanya — langsung trigger
+      // Cek nada tanya
       const last = transcriptRef.current.trim().split(/[.!]+/).pop() ?? '';
       if (isQuestion(last) && last.length > 5) {
         fireSilence();
         return;
       }
 
-      // Set timer jeda
-      silenceTimerRef.current = setTimeout(() => {
-        fireSilence();
-      }, silenceMs);
+      // Jeda timer
+      silenceTimerRef.current = setTimeout(fireSilence, silenceMs);
     };
 
     rec.onend = () => {
@@ -247,23 +322,23 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
       if (enabledRef.current) setTimeout(start, 150);
     };
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error === 'not-allowed') { stop(); return; }
+      if (e.error === 'not-allowed') { stopRef.current(); return; }
       runningRef.current = false;
       recRef.current     = null;
-      if (enabledRef.current) setTimeout(start, 500);
+      if (enabledRef.current) setTimeout(start, 800);
     };
 
     recRef.current = rec;
-    try { rec.start(); } catch { setTimeout(start, 500); }
+    try { rec.start(); } catch { setTimeout(start, 800); }
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
     if (enabled) { start(); } else { stop(); }
-    return stop;
+    return () => stop();
   }, [enabled, start, stop]);
 }
 
-// ─── Canvas animation per fase ────────────────────────────────────────────────
+// ─── Hook: canvas animasi per fase ───────────────────────────────────────────
 
 function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phase: OrbPhase) {
   const angleRef  = useRef(0);
@@ -285,25 +360,16 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
       ctx.fillRect(0, 0, w, h);
       const cx = w / 2, cy = h / 2;
 
-      // Sesuaikan parameter per fase
       let ringAlpha = 0.07, pulseSpeed = 0.010, ringCount = 3, waveAmp = 8;
       let c1 = PALETTE.navy, c2 = PALETTE.tan;
 
-      if (phase === 'speaking') {
-        c1 = PALETTE.tan; c2 = PALETTE.cream;
-        ringAlpha = 0.12; pulseSpeed = 0.030; ringCount = 4; waveAmp = 28;
-      } else if (phase === 'listening') {
-        c1 = PALETTE.navy; c2 = PALETTE.cream;
-        ringAlpha = 0.14; pulseSpeed = 0.025; ringCount = 5; waveAmp = 40;
-      } else if (phase === 'popup') {
-        c1 = PALETTE.cream; c2 = PALETTE.tan;
-        ringAlpha = 0.08; pulseSpeed = 0.008; ringCount = 3; waveAmp = 6;
-      }
+      if (phase === 'speaking')  { c1 = PALETTE.tan;   c2 = PALETTE.cream; ringAlpha = 0.12; pulseSpeed = 0.030; ringCount = 4; waveAmp = 28; }
+      else if (phase === 'listening') { c1 = PALETTE.navy; c2 = PALETTE.cream; ringAlpha = 0.14; pulseSpeed = 0.025; ringCount = 5; waveAmp = 40; }
+      else if (phase === 'popup') { c1 = PALETTE.cream; c2 = PALETTE.tan;   ringAlpha = 0.08; pulseSpeed = 0.008; ringCount = 3; waveAmp = 6; }
 
       angleRef.current += pulseSpeed;
       const a = angleRef.current;
 
-      // Aura radial
       const aura = ctx.createRadialGradient(cx, cy, 0, cx, cy, 320);
       aura.addColorStop(0,   `rgba(${c1.r},${c1.g},${c1.b},0.06)`);
       aura.addColorStop(0.5, `rgba(${c2.r},${c2.g},${c2.b},0.03)`);
@@ -311,7 +377,6 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
       ctx.fillStyle = aura;
       ctx.beginPath(); ctx.arc(cx, cy, 320, 0, Math.PI * 2); ctx.fill();
 
-      // Cincin konsentris
       for (let i = 0; i < ringCount; i++) {
         const t  = i / ringCount;
         const r  = PALETTE.navy.r * (1 - t) + PALETTE.tan.r * t | 0;
@@ -323,15 +388,14 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
         ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
       }
 
-      // Gelombang
-      const drawWave = (freq: number, phase2: number, amp: number, maxDist: number, alpha: number, lw: number, col: { r: number; g: number; b: number }) => {
+      const drawWave = (freq: number, ph: number, amp: number, maxDist: number, alpha: number, lw: number, col: { r: number; g: number; b: number }) => {
         ctx.strokeStyle = `rgba(${col.r},${col.g},${col.b},${alpha})`;
         ctx.lineWidth   = lw;
         ctx.beginPath();
         for (let x = 0; x <= w; x += 8) {
           const dist = Math.abs(x - cx);
           const a2   = dist < maxDist ? amp * Math.cos((dist / maxDist) * (Math.PI / 2)) : 0;
-          const y    = cy + Math.sin(x * freq + phase2) * a2;
+          const y    = cy + Math.sin(x * freq + ph) * a2;
           x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
         ctx.stroke();
@@ -351,71 +415,35 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
   }, [phase]);
 }
 
-// ─── Sub-component: OrbCore ───────────────────────────────────────────────────
+// ─── OrbCore ─────────────────────────────────────────────────────────────────
 
-interface OrbCoreProps {
-  phase: OrbPhase;
-  wakeEnabled: boolean;
-  wakeFlash:   boolean;
-}
+interface OrbCoreProps { phase: OrbPhase; wakeEnabled: boolean; wakeFlash: boolean; }
 
 function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
-  const glowColor = {
-    idle:      '#1e2a4a',
-    speaking:  '#b8a898',
-    listening: '#1e2a4a',
-    popup:     '#b8a898',
-  }[phase];
-
-  const orbRing = {
-    idle:      'ring-[3px] ring-[#1e2a4a]/20',
-    speaking:  'ring-[5px] ring-[#b8a898]/60',
-    listening: 'ring-[5px] ring-[#1e2a4a]/40',
-    popup:     'ring-[3px] ring-[#b8a898]/30',
-  }[phase];
+  const glowColor = { idle: '#1e2a4a', speaking: '#b8a898', listening: '#1e2a4a', popup: '#b8a898' }[phase];
+  const orbRing   = { idle: 'ring-[3px] ring-[#1e2a4a]/20', speaking: 'ring-[5px] ring-[#b8a898]/60', listening: 'ring-[5px] ring-[#1e2a4a]/40', popup: 'ring-[3px] ring-[#b8a898]/30' }[phase];
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: 340, height: 340 }}>
-
-      {/* Ring hijau saat wake-word aktif (idle) */}
       {wakeEnabled && phase === 'idle' && (
         <div className="absolute rounded-full pointer-events-none"
           style={{ width: 280, height: 280, border: '1.5px solid rgba(16,185,129,0.35)', animation: 'wakeRingPulse 2.2s ease-in-out infinite' }} />
       )}
-
-      {/* Flash ring saat deteksi */}
       {wakeFlash && (
         <div className="absolute rounded-full pointer-events-none"
           style={{ width: 280, height: 280, border: '2.5px solid rgba(16,185,129,0.7)', animation: 'wakeFlashRing 0.9s ease-out forwards' }} />
       )}
-
-      {/* Ring ungu saat listening */}
       {phase === 'listening' && (
         <div className="absolute rounded-full pointer-events-none"
           style={{ width: 290, height: 290, border: '1.5px solid rgba(127,119,221,0.45)', animation: 'listeningPulse 1.8s ease-in-out infinite' }} />
       )}
-
-      {/* Outer glow */}
       <div className="absolute rounded-full transition-all duration-700 ease-out"
         style={{ width: 260, height: 260, background: `radial-gradient(circle, ${glowColor}22 0%, transparent 75%)`, filter: 'blur(32px)', transform: `scale(${phase === 'listening' ? 1.12 : 1})` }} />
-
-      {/* Main orb button */}
-      <div
-        className={`relative rounded-full flex items-center justify-center border-none transition-all duration-700 ease-out ${orbRing}`}
-        style={{
-          width: 200, height: 200,
-          background: 'conic-gradient(from 0deg, #1e2a4a 0%, #b8a898 35%, #f5f0e8 55%, #b8a898 75%, #1e2a4a 100%)',
-          boxShadow:  `0 28px 60px -12px ${glowColor}40, 0 0 0 1px rgba(255,255,255,0.15) inset`,
-          animation:  'orbSpin 14s linear infinite',
-        }}>
-        {/* Inner shine */}
+      <div className={`relative rounded-full flex items-center justify-center border-none transition-all duration-700 ease-out ${orbRing}`}
+        style={{ width: 200, height: 200, background: 'conic-gradient(from 0deg, #1e2a4a 0%, #b8a898 35%, #f5f0e8 55%, #b8a898 75%, #1e2a4a 100%)', boxShadow: `0 28px 60px -12px ${glowColor}40, 0 0 0 1px rgba(255,255,255,0.15) inset`, animation: 'orbSpin 14s linear infinite' }}>
         <div className="absolute rounded-full"
           style={{ inset: 6, background: 'radial-gradient(ellipse at 35% 30%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.08) 60%, transparent 100%)' }} />
-
-        {/* Icon per fase */}
         <div className="relative flex flex-col items-center justify-center z-10">
-
-          {/* idle — bar rendah statis */}
           {phase === 'idle' && (
             <div className="flex gap-[5px] items-end h-7">
               {[0.5, 0.75, 1, 0.75, 0.5].map((s, i) => (
@@ -424,8 +452,6 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
               ))}
             </div>
           )}
-
-          {/* speaking — bar aktif bergerak */}
           {phase === 'speaking' && (
             <div className="flex gap-[5px] items-end h-7">
               {[0.6, 0.9, 1, 0.8, 0.5, 0.7, 0.4].map((s, i) => (
@@ -434,8 +460,6 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
               ))}
             </div>
           )}
-
-          {/* listening — ripple dots */}
           {phase === 'listening' && (
             <div className="flex gap-[6px] items-center">
               {[0, 1, 2, 3, 4].map((i) => (
@@ -444,8 +468,6 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
               ))}
             </div>
           )}
-
-          {/* popup — checkmark diam */}
           {phase === 'popup' && (
             <div className="flex items-center justify-center w-10 h-10">
               <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
@@ -455,15 +477,13 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
           )}
         </div>
       </div>
-
-      {/* Dashed accent ring */}
       <div className="absolute rounded-full border border-[#1e2a4a]/10 pointer-events-none"
         style={{ width: 236, height: 236, animation: 'spinSlow 18s linear infinite reverse', borderStyle: 'dashed', borderWidth: '1px' }} />
     </div>
   );
 }
 
-// ─── Sub-component: StatusPill ────────────────────────────────────────────────
+// ─── StatusPill ───────────────────────────────────────────────────────────────
 
 function StatusPill({ phase }: { phase: OrbPhase }) {
   const config = {
@@ -472,7 +492,6 @@ function StatusPill({ phase }: { phase: OrbPhase }) {
     listening: { color: '#7F77DD', label: 'Mendengarkan percakapan' },
     popup:     { color: '#b8a898', label: 'Data ditangkap' },
   }[phase];
-
   return (
     <div className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-[#1e2a4a]/8 bg-white/60 backdrop-blur-sm"
       style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -482,21 +501,14 @@ function StatusPill({ phase }: { phase: OrbPhase }) {
   );
 }
 
-// ─── Sub-component: DataPopup ─────────────────────────────────────────────────
+// ─── DataPopup ────────────────────────────────────────────────────────────────
 
-interface DataPopupProps {
-  data:     CapturedData;
-  onClose:  () => void;
-  onSOAP:   () => void;
-}
+interface DataPopupProps { data: CapturedData; onClose: () => void; onSOAP: () => void; }
 
 function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
   return (
-    // Faux viewport agar tidak pakai position:fixed
     <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,42,74,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' }}>
       <div style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 460, boxShadow: '0 32px 72px -12px rgba(30,42,74,0.28)', overflow: 'hidden', animation: 'popupIn 0.35s cubic-bezier(0.16,1,0.3,1) forwards' }}>
-
-        {/* Header navy */}
         <div style={{ background: '#1e2a4a', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(245,240,232,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -512,11 +524,7 @@ function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(245,240,232,0.5)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 4 }}>✕</button>
         </div>
-
-        {/* Body */}
         <div style={{ padding: '16px 18px' }}>
-
-          {/* Transkrip mini */}
           {data.transcript && (
             <div style={{ marginBottom: 14, padding: '8px 12px', background: '#f9f8f6', borderRadius: 8, borderLeft: '2px solid #b8a898' }}>
               <p style={{ fontSize: 10, color: '#b8a898', margin: '0 0 4px', fontFamily: "'DM Mono', monospace", letterSpacing: '0.08em', textTransform: 'uppercase' }}>Transkrip</p>
@@ -525,33 +533,27 @@ function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
               </p>
             </div>
           )}
-
-          {/* Entitas */}
-          {[
-            { label: 'Keluhan',          items: data.keluhan,    color: '#e74c3c', bg: '#fef2f2' },
-            { label: 'Obat / terapi',    items: data.obat,       color: '#1e2a4a', bg: '#f0f4ff' },
-            { label: 'Pertanyaan dokter',items: data.pertanyaan, color: '#7F77DD', bg: '#eeedfe' },
-          ].map(({ label, items, color, bg }) => items.length > 0 && (
+          {([
+            { label: 'Keluhan',           items: data.keluhan,    color: '#e74c3c', bg: '#fef2f2' },
+            { label: 'Obat / terapi',     items: data.obat,       color: '#1e2a4a', bg: '#f0f4ff' },
+            { label: 'Pertanyaan dokter', items: data.pertanyaan, color: '#7F77DD', bg: '#eeedfe' },
+          ] as const).map(({ label, items, color, bg }) => items.length > 0 && (
             <div key={label} style={{ marginBottom: 10 }}>
               <p style={{ fontSize: 10, color: '#b8a898', margin: '0 0 5px', fontFamily: "'DM Mono', monospace", letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 {items.slice(0, 3).map((item, i) => (
-                  <span key={i} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: bg, color, fontFamily: "'DM Sans', sans-serif", maxWidth: '100%' }}>
+                  <span key={i} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: bg, color, fontFamily: "'DM Sans', sans-serif" }}>
                     {item.length > 60 ? item.slice(0, 60) + '…' : item}
                   </span>
                 ))}
               </div>
             </div>
           ))}
-
-          {/* Kosong fallback */}
           {!data.keluhan.length && !data.obat.length && !data.pertanyaan.length && (
             <p style={{ fontSize: 12, color: '#b8a898', textAlign: 'center', margin: '8px 0', fontFamily: "'DM Sans', sans-serif" }}>
               Percakapan dicatat — tidak ada entitas spesifik terdeteksi.
             </p>
           )}
-
-          {/* Tombol aksi */}
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
             <button onClick={onSOAP}
               style={{ flex: 1, padding: '9px 0', fontSize: 12, fontWeight: 500, background: '#1e2a4a', color: '#f5f0e8', border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
@@ -568,93 +570,101 @@ function DataPopup({ data, onClose, onSOAP }: DataPopupProps) {
   );
 }
 
-// ─── Component utama ──────────────────────────────────────────────────────────
+// ─── LandingPage ──────────────────────────────────────────────────────────────
 
 export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const [phase,       setPhase]       = useState<OrbPhase>('idle');
-  const [wakeEnabled, setWakeEnabled] = useState(false);
-  const [wakeFlash,   setWakeFlash]   = useState(false);
+  const [phase,        setPhase]        = useState<OrbPhase>('idle');
+  const [wakeEnabled,  setWakeEnabled]  = useState(false);
+  const [wakeFlash,    setWakeFlash]    = useState(false);
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
+
+  // Simpan phase ke ref agar handleWakeWord tidak stale
+  const phaseRef = useRef<OrbPhase>('idle');
+  phaseRef.current = phase;
 
   const hasSpeechAPI =
     typeof window !== 'undefined' &&
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
-  // ── Minta izin mic saat mount ──────────────────────────────────────────────
-  useEffect(() => {
-    if (!hasSpeechAPI) return;
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => setWakeEnabled(true))
-      .catch((err) => console.warn('[Cenna] Mic permission denied:', err));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Canvas ─────────────────────────────────────────────────────────────────
   useOrbCanvas(canvasRef, phase);
 
-  // ── Fase: wake-word terdeteksi → speaking → listening ─────────────────────
+  // handleWakeWord — baca phase dari REF bukan closure agar tidak stale
   const handleWakeWord = useCallback(() => {
-    if (phase !== 'idle') return;
+    if (phaseRef.current !== 'idle') {
+      console.log('[Cenna] wake word ignored — phase is', phaseRef.current);
+      return;
+    }
+    console.log('[Cenna] wake word! transitioning idle → speaking');
 
-    // Flash visual
     setWakeFlash(true);
     setTimeout(() => setWakeFlash(false), 900);
 
-    // Fase speaking: Cenna menyapa via TTS
     setPhase('speaking');
-    setWakeEnabled(false); // matikan wake listener sementara
+    setWakeEnabled(false);
 
-    const greet = () => {
-      if (!('speechSynthesis' in window)) {
+    // Jalankan TTS dengan fallback timeout agar phase tidak stuck di 'speaking'.
+    // Chrome kadang tidak fire onend jika speechSynthesis sedang busy.
+    const goListening = () => {
+      if (phaseRef.current === 'speaking') {
+        console.log('[Cenna] → listening');
         setPhase('listening');
+      }
+    };
+
+    setTimeout(() => {
+      if (!('speechSynthesis' in window)) {
+        goListening();
         return;
       }
+      // Cancel utterance yang mungkin masih antri
+      window.speechSynthesis.cancel();
+
       const utt = new SpeechSynthesisUtterance('Halo, saya Cenna. Silakan lanjutkan percakapan.');
       utt.lang  = 'id-ID';
       utt.rate  = 0.95;
-      utt.onend = () => setPhase('listening');
+      utt.onend = () => {
+        console.log('[Cenna] TTS done → listening');
+        goListening();
+      };
+      utt.onerror = () => goListening(); // fallback jika TTS error
       window.speechSynthesis.speak(utt);
-    };
 
-    // Delay kecil agar animasi orb sempat tampil
-    setTimeout(greet, 350);
-  }, [phase]);
+      // Hard fallback: jika onend tidak fire dalam 5 detik, lanjut paksa
+      setTimeout(goListening, 5000);
+    }, 350);
+  }, []); // tidak ada deps — baca dari phaseRef
 
-  useWakeWord(handleWakeWord, wakeEnabled && phase === 'idle');
+  // Wake-word aktif saat idle — hook mengelola mic permission sendiri
+  useWakeWord(handleWakeWord, phase === 'idle');
 
-  // ── Fase: ambient listener ─────────────────────────────────────────────────
   const handleAmbientData = useCallback((data: CapturedData) => {
     setCapturedData(data);
     setPhase('popup');
   }, []);
 
   useAmbientListener({
-    enabled:  phase === 'listening',
+    enabled:   phase === 'listening',
     silenceMs: 3000,
-    onData:   handleAmbientData,
+    onData:    handleAmbientData,
   });
 
-  // ── Aksi popup ─────────────────────────────────────────────────────────────
   const handleClosePopup = () => {
     setCapturedData(null);
-    setPhase('listening'); // kembali mendengarkan
+    setPhase('listening');
   };
 
   const handleSOAP = () => {
     setCapturedData(null);
-    onLoginClick(); // langsung ke login / dashboard
+    onLoginClick();
   };
 
   return (
     <div className="relative min-h-screen w-full bg-white overflow-hidden flex flex-col items-center justify-center select-none">
-
-      {/* Canvas background */}
       <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none" />
 
-      {/* Wake flash overlay */}
       {wakeFlash && (
         <div className="absolute inset-0 z-20 pointer-events-none"
           style={{ background: 'radial-gradient(circle at center, rgba(16,185,129,0.15) 0%, transparent 70%)', animation: 'wakeFlash 0.9s ease-out forwards' }} />
@@ -662,8 +672,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       {/* Wordmark */}
       <div className="absolute top-5 left-7 z-30 flex items-center gap-3">
-        <img src={CENNA_LOGO} alt="CENNA"
-          className="w-10 h-10 object-contain"
+        <img src={CENNA_LOGO} alt="CENNA" className="w-10 h-10 object-contain"
           style={{ filter: 'brightness(0) saturate(100%) invert(14%) sepia(27%) saturate(1200%) hue-rotate(196deg) brightness(95%) contrast(95%)' }} />
         <div className="flex flex-col leading-tight">
           <span className="text-[13px] font-semibold tracking-[0.22em] uppercase" style={{ fontFamily: "'DM Sans', sans-serif", color: '#1e2a4a' }}>CENNA AI</span>
@@ -671,19 +680,14 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         </div>
       </div>
 
-      {/* Tombol admin (kanan atas) */}
-      <button
-        onClick={onLoginClick}
+      <button onClick={onLoginClick}
         className="absolute top-5 right-7 z-30 text-[10px] tracking-[0.18em] uppercase text-[#1e2a4a]/30 hover:text-[#1e2a4a]/60 transition-colors"
         style={{ fontFamily: "'DM Mono', monospace", background: 'none', border: 'none', cursor: 'pointer' }}>
         Admin →
       </button>
 
-      {/* Konten utama */}
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
         <OrbCore phase={phase} wakeEnabled={wakeEnabled} wakeFlash={wakeFlash} />
-
-        {/* Keterangan fase */}
         <div className="mt-5" style={{ minHeight: 36 }}>
           {phase === 'idle' && !hasSpeechAPI && (
             <p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -703,35 +707,27 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         </div>
       </div>
 
-      {/* Status pill bawah */}
       <div className="absolute bottom-8 left-0 right-0 flex justify-center z-10">
         <StatusPill phase={phase} />
       </div>
 
-      {/* Data popup — ditampilkan saat fase popup */}
       {phase === 'popup' && capturedData && (
-        <DataPopup
-          data={capturedData}
-          onClose={handleClosePopup}
-          onSOAP={handleSOAP}
-        />
+        <DataPopup data={capturedData} onClose={handleClosePopup} onSOAP={handleSOAP} />
       )}
 
-      {/* Keyframes global */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
-        @keyframes orbSpin       { from{filter:hue-rotate(0deg) brightness(1.02)} 50%{filter:hue-rotate(8deg) brightness(1.06)} to{filter:hue-rotate(0deg) brightness(1.02)} }
-        @keyframes barBounce     { from{transform:scaleY(0.45);opacity:0.45} to{transform:scaleY(1);opacity:1} }
-        @keyframes dotPulse      { 0%,100%{transform:scale(0.6);opacity:0.35} 50%{transform:scale(1.25);opacity:1} }
-        @keyframes spinSlow      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        @keyframes pulse         { 0%,100%{opacity:0.5;transform:scale(0.9)} 50%{opacity:1;transform:scale(1.1)} }
-        @keyframes wakeRingPulse { 0%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.06);opacity:0.22} 100%{transform:scale(1);opacity:0.5} }
-        @keyframes wakeFlashRing { 0%{transform:scale(1);opacity:1} 100%{transform:scale(1.2);opacity:0} }
-        @keyframes wakeFlash     { 0%{opacity:1} 100%{opacity:0} }
-        @keyframes listeningPulse{ 0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.08);opacity:0.25} }
-        @keyframes fadeIn        { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes popupIn       { from{opacity:0;transform:scale(0.93) translateY(16px)} to{opacity:1;transform:scale(1) translateY(0)} }
+        @keyframes orbSpin        { from{filter:hue-rotate(0deg) brightness(1.02)} 50%{filter:hue-rotate(8deg) brightness(1.06)} to{filter:hue-rotate(0deg) brightness(1.02)} }
+        @keyframes barBounce      { from{transform:scaleY(0.45);opacity:0.45} to{transform:scaleY(1);opacity:1} }
+        @keyframes dotPulse       { 0%,100%{transform:scale(0.6);opacity:0.35} 50%{transform:scale(1.25);opacity:1} }
+        @keyframes spinSlow       { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes pulse          { 0%,100%{opacity:0.5;transform:scale(0.9)} 50%{opacity:1;transform:scale(1.1)} }
+        @keyframes wakeRingPulse  { 0%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.06);opacity:0.22} 100%{transform:scale(1);opacity:0.5} }
+        @keyframes wakeFlashRing  { 0%{transform:scale(1);opacity:1} 100%{transform:scale(1.2);opacity:0} }
+        @keyframes wakeFlash      { 0%{opacity:1} 100%{opacity:0} }
+        @keyframes listeningPulse { 0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.08);opacity:0.25} }
+        @keyframes fadeIn         { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes popupIn        { from{opacity:0;transform:scale(0.93) translateY(16px)} to{opacity:1;transform:scale(1) translateY(0)} }
       `}</style>
     </div>
   );
