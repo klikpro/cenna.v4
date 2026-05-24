@@ -121,6 +121,7 @@ export const DEMO_AUDIT_LOGS: AuditLogEntry[] = [
 
 // LOCAL STORAGE HELPERS WITH INITIAL SEEDING
 
+/** @deprecated Gunakan sbGetDoctors() — fallback offline saja, JANGAN dipanggil di production */
 export function getLocalDoctors(): Doctor[] {
   const stored = localStorage.getItem('CENNA_DOCTORS');
   if (!stored) {
@@ -130,10 +131,12 @@ export function getLocalDoctors(): Doctor[] {
   return JSON.parse(stored);
 }
 
+/** @deprecated Gunakan sbGetDoctors() setelah upsert — jangan simpan langsung ke localStorage */
 export function saveLocalDoctors(docs: Doctor[]) {
   localStorage.setItem('CENNA_DOCTORS', JSON.stringify(docs));
 }
 
+/** @deprecated Gunakan sbGetDrugs() */
 export function getLocalDrugs(): Drug[] {
   const stored = localStorage.getItem('CENNA_DRUGS');
   if (!stored) {
@@ -143,10 +146,12 @@ export function getLocalDrugs(): Drug[] {
   return JSON.parse(stored);
 }
 
+/** @deprecated Gunakan sbUpsertDrug() */
 export function saveLocalDrugs(drugs: Drug[]) {
   localStorage.setItem('CENNA_DRUGS', JSON.stringify(drugs));
 }
 
+/** @deprecated Gunakan sbGetIcd() */
 export function getLocalIcd(): IcdCode[] {
   const stored = localStorage.getItem('CENNA_ICD');
   if (!stored) {
@@ -156,10 +161,12 @@ export function getLocalIcd(): IcdCode[] {
   return JSON.parse(stored);
 }
 
+/** @deprecated Gunakan sbImportIcd() */
 export function saveLocalIcd(codes: IcdCode[]) {
   localStorage.setItem('CENNA_ICD', JSON.stringify(codes));
 }
 
+/** @deprecated Gunakan sbGetLogs() */
 export function getLocalLogs(): AuditLogEntry[] {
   const stored = localStorage.getItem('CENNA_LOGS');
   if (!stored) {
@@ -169,10 +176,15 @@ export function getLocalLogs(): AuditLogEntry[] {
   return JSON.parse(stored);
 }
 
+/** @deprecated Gunakan sbAddLog() */
 export function saveLocalLogs(logs: AuditLogEntry[]) {
   localStorage.setItem('CENNA_LOGS', JSON.stringify(logs));
 }
 
+/**
+ * @deprecated Gunakan sbAddLog() — fungsi ini hanya untuk fallback offline.
+ * IP address di log ini tidak akurat (tidak bisa diambil dari browser).
+ */
 export function addLocalLog(level: AuditLogEntry['level'], category: AuditLogEntry['category'], message: string, detailObj?: object) {
   const logs = getLocalLogs();
   const newLog: AuditLogEntry = {
@@ -182,13 +194,82 @@ export function addLocalLog(level: AuditLogEntry['level'], category: AuditLogEnt
     category,
     message,
     user: sessionStorage.getItem('cenna_admin') ? JSON.parse(sessionStorage.getItem('cenna_admin')!).name || 'Admin' : 'SYSTEM',
-    ip: '192.168.1.1' + Math.floor(Math.random() * 9),
+    ip: 'unknown', // BUG-C1 FIX: IP tidak bisa diambil dari browser — gunakan 'unknown'
     detail: detailObj ? JSON.stringify(detailObj) : undefined
   };
   logs.unshift(newLog);
   if (logs.length > 300) logs.pop();
   saveLocalLogs(logs);
 }
+
+// ── DEFAULT PROMPT CONSTANTS ───────────────────────────────────────────────
+// Sumber kebenaran tunggal untuk semua default prompt AI.
+// Diimport oleh LandingPage.tsx (fallback runtime) dan AiConfig.tsx (reset default).
+// JANGAN duplikasi string ini di file lain.
+
+export const DEFAULT_PROMPT_ANAMNESIS = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
+
+Tugasmu adalah menggali anamnesis secara sistematis mengikuti kerangka PQRST, Riwayat Penyakit Dahulu (RPD), Riwayat Penyakit Keluarga (RPK), Riwayat Pribadi & Sosial (RPS), dan Pemeriksaan Fisik (jika tersedia).
+
+== PRINSIP UTAMA ==
+- JANGAN memperkenalkan diri — langsung masuk ke penggalian anamnesis
+- JANGAN bertanya dengan urutan ronde yang kaku atau target jumlah pertanyaan
+- Setiap giliran, evaluasi field mana yang BENAR-BENAR kosong dan paling krusial secara klinis untuk membedakan diagnosis
+- Jika jawaban pasien sudah menjawab beberapa field sekaligus, langsung tandai semua field tersebut terisi — JANGAN tanya ulang
+- Prioritas pertanyaan ditentukan oleh KONTEKS KLINIS, bukan urutan alfabet atau urutan PQRST
+- Berikan kesimpulan klinis SEGERA setelah data yang tersedia sudah cukup untuk membedakan diagnosa utama
+- Jika ada RED FLAG, langsung tandai dan prioritaskan tatalaksana emergensi
+
+== KERANGKA PQRST ==
+- P (Provokasi/Paliatif): Apa yang memperberat atau meringankan keluhan?
+- Q (Kualitas): Bagaimana sifat / karakter keluhannya? (nyeri tumpul, tajam, seperti ditusuk, terbakar, dll)
+- R (Radiasi/Regio): Di mana lokasi keluhannya? Apakah menjalar ke tempat lain?
+- S (Skala/Severitas): Berapa skala keluhannya dari 0-10? Atau seberapa mengganggu aktivitas?
+- T (Time/Waktu): Kapan mulai? Sudah berapa lama? Terus-menerus atau hilang-timbul?
+
+== RIWAYAT ==
+- RPD: Pernah sakit serupa sebelumnya? Penyakit kronis? Operasi? Rawat inap?
+- RPK: Ada anggota keluarga dengan penyakit serupa atau penyakit herediter?
+- RPS: Merokok? Alkohol? Pekerjaan? Aktivitas fisik? Alergi obat?
+
+== KAPAN BERIKAN CONCLUSION ==
+Berikan conclusion (phase: complete) jika SALAH SATU kondisi terpenuhi:
+- PQRST minimal 3 dari 5 terisi DAN salah satu dari RPD/RPK/RPS terisi
+- Ada RED FLAG yang jelas mengindikasikan satu diagnosa kritis
+- Pasien menyatakan sudah selesai / terima kasih
+- Data yang ada sudah cukup untuk menyusun DDx dengan probabilitas bermakna
+
+== FORMAT OUTPUT WAJIB JSON (tidak ada teks di luar JSON) ==
+{"voice_response":"","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":["field yg masih kosong"],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
+
+Saat phase "complete", sertakan conclusion:
+{"diagnosis_utama":"","icd10_code":"","diagnosis_banding":[{"diagnosis":"","icd10":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
+
+export const DEFAULT_PROMPT_CORE = `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu dokter di klinik.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`;
+
+export const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`;
+
+export const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
+
+export const DEFAULT_PROMPT_MEDICATION = `Evaluasi keamanan regimen obat berikut:\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`;
+
+export const DEFAULT_REASONING_CONFIG = {
+  framework: 'hypothetico-deductive',
+  evidenceLevel: '1b',
+  rules: '',
+};
+
+export const DEFAULT_AI_BEHAVIOR = {
+  profile: 'gp' as const,
+  ddx: true,
+  ebm: true,
+  uncertain: true,
+  followup: true,
+  edu: true,
+  soapDetail: 4,
+  ddxCount: 3,
+  lang: 'id-medical',
+};
 
 // ── DATABASE LAYER (Supabase) ───────────────────────────────────────────────
 // All functions below read/write from Supabase. They are used by App.tsx
@@ -428,13 +509,10 @@ export async function sbAddLog(
 export async function sbSaveSession(session: CennaSession): Promise<void> {
   const client = getSupabaseClient();
   if (!client) {
-    // Fallback: simpan ke localStorage jika Supabase tidak tersedia
-    const key = 'CENNA_SESSIONS';
-    const stored: CennaSession[] = JSON.parse(localStorage.getItem(key) || '[]');
-    stored.unshift(session);
-    if (stored.length > 100) stored.pop();
-    localStorage.setItem(key, JSON.stringify(stored));
-    console.info('[sbSaveSession] Saved to localStorage (no Supabase client)');
+    // BUG-H3 FIX: Data anamnesis klinis pasien TIDAK boleh disimpan ke localStorage.
+    // localStorage bisa diakses siapapun yang memiliki akses ke browser/device.
+    // Jika Supabase tidak tersedia, log error dan hentikan — jangan simpan ke browser.
+    console.error('[sbSaveSession] Supabase tidak tersedia — sesi klinis TIDAK disimpan. Periksa koneksi dan konfigurasi VITE_SUPABASE_URL.');
     return;
   }
   const { error } = await client.from('cenna_sessions').upsert(session, { onConflict: 'id' });
@@ -449,7 +527,10 @@ export async function sbSaveSession(session: CennaSession): Promise<void> {
 export async function sbGetSessions(limit = 50): Promise<CennaSession[]> {
   const client = getSupabaseClient();
   if (!client) {
-    return JSON.parse(localStorage.getItem('CENNA_SESSIONS') || '[]').slice(0, limit);
+    // BUG-H3 FIX: Kembalikan array kosong jika Supabase tidak tersedia.
+    // Jangan baca data klinis dari localStorage — data lama mungkin sudah stale atau sensitif.
+    console.warn('[sbGetSessions] Supabase tidak tersedia — mengembalikan array kosong.');
+    return [];
   }
   const { data, error } = await client
     .from('cenna_sessions')

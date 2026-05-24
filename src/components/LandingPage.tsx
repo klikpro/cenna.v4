@@ -15,7 +15,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { sbGetSetting, sbSetSetting, sbSaveSession } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbSaveSession, DEFAULT_PROMPT_ANAMNESIS } from '../lib/supabase';
 import { callActiveAI } from './ApiSettings';
 import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './tts-constants';
 import type { AnamnesisData, ClinicalConclusion } from '../types';
@@ -55,6 +55,22 @@ const CENNA_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgAAAAYACAYAAA
 
 // ─── Wake-word patterns ───────────────────────────────────────────────────────
 
+/**
+ * Normalisasi teks lebih agresif:
+ * - lowercase
+ * - hapus semua non-latin (strip accent, tanda baca, angka)
+ * - collapse spasi ganda
+ */
+function normalizeText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')                     // pisahkan accent dari huruf
+    .replace(/[\u0300-\u036f]/g, '')      // hapus accent marks
+    .replace(/[^a-z ]/g, ' ')            // hapus semua bukan huruf/spasi
+    .replace(/\s+/g, ' ')               // collapse spasi ganda
+    .trim();
+}
+
 const WAKE_PATTERNS = [
   // Variasi 'cenna'
   'hai cenna', 'hei cenna', 'hey cenna', 'hi cenna',
@@ -78,41 +94,24 @@ const WAKE_PATTERNS = [
   'haisenna',  'heisenna',
 ];
 
-/**
- * Normalisasi lebih agresif:
- * - lowercase
- * - hapus semua non-latin (strip accent, tanda baca, angka)
- * - collapse spasi ganda
- */
-function normalizeText(raw: string): string {
-  return raw
-    .toLowerCase()
-    .normalize('NFD')                     // pisahkan accent dari huruf
-    .replace(/[\u0300-\u036f]/g, '')      // hapus accent marks
-    .replace(/[^a-z ]/g, ' ')            // hapus semua bukan huruf/spasi
-    .replace(/\s+/g, ' ')               // collapse spasi ganda
-    .trim();
-}
-
 function matchesWakeWord(raw: string): boolean {
   const t = normalizeText(raw);
-  console.log('[Cenna wake] normalizing:', JSON.stringify(raw), '→', JSON.stringify(t));
+  console.log('[Cenna wake] normalizing:', JSON.stringify(raw), '\u2192', JSON.stringify(t));
 
   // 1. Exact pattern match
   if (WAKE_PATTERNS.some((p) => t.includes(p))) {
-    console.log('[Cenna wake] ✓ MATCHED (pattern) on:', JSON.stringify(t));
+    console.log('[Cenna wake] \u2713 MATCHED (pattern) on:', JSON.stringify(t));
     return true;
   }
 
   // 2. Fuzzy fallback: "hai/hei/hey/hi" + spasi + 4-7 huruf (nama apapun)
-  //    Menangkap kasus STT menghasilkan kata yang tidak ada di WAKE_PATTERNS
   const fuzzy = /\b(hai|hei|hey|hi)\s+[a-z]{4,7}\b/.test(t);
-  if (fuzzy) console.log('[Cenna wake] ✓ MATCHED (fuzzy) on:', JSON.stringify(t));
-  else       console.log('[Cenna wake] ✗ no match for:', JSON.stringify(t));
+  if (fuzzy) console.log('[Cenna wake] \u2713 MATCHED (fuzzy) on:', JSON.stringify(t));
+  else       console.log('[Cenna wake] \u2717 no match for:', JSON.stringify(t));
   return fuzzy;
 }
 
-// ─── Kata penutup sesi (voice trigger untuk akhiri) ─────────────────────────
+// \u2500\u2500\u2500 Kata penutup sesi (voice trigger untuk akhiri) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const CLOSING_PATTERNS = [
   'terima kasih cenna', 'terima kasih senna', 'terima kasih kena',
   'makasih cenna', 'makasih senna',
@@ -128,46 +127,28 @@ function matchesClosingWord(raw: string): boolean {
   return CLOSING_PATTERNS.some(p => t.includes(p));
 }
 
-// ─── AI Voice Assistant: PQRST-based anamnesis system ─────────────────────────
-// Prompt fallback (dipakai jika database belum dikonfigurasi)
-const CENNA_ANAMNESIS_FALLBACK = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
-
-== PRINSIP UTAMA ==
-- JANGAN memperkenalkan diri — langsung masuk ke penggalian anamnesis
-- JANGAN bertanya dengan urutan ronde yang kaku atau target jumlah pertanyaan
-- Setiap giliran, evaluasi field mana yang BENAR-BENAR kosong dan paling krusial secara klinis untuk membedakan diagnosis
-- Jika jawaban pasien sudah menjawab beberapa field sekaligus, langsung tandai semua field tersebut terisi — JANGAN tanya ulang
-- Jika sebuah field tidak bisa digali karena pasien tidak tahu atau tidak relevan (contoh: RPK untuk penyakit tidak herediter), isi dengan "tidak diketahui" atau "tidak relevan" dan lanjutkan
-- Prioritas pertanyaan ditentukan oleh KONTEKS KLINIS, bukan urutan alfabet atau urutan PQRST
-- Berikan kesimpulan klinis SEGERA setelah data yang tersedia sudah cukup untuk membedakan diagnosa utama — tidak perlu menunggu semua field terisi
-- Jika ada RED FLAG, langsung tandai dan prioritaskan tatalaksana emergensi
-
-== STRATEGI PENGGALIAN ADAPTIF ==
-1. Baca "missing_fields" dari status anamnesis saat ini
-2. Dari daftar field yang kosong, pilih 1-2 yang paling mengubah probabilitas diagnosis
-3. Susun pertanyaan yang natural dan efisien — bisa menggali 2-3 field dalam 1 kalimat
-4. Jika pasien sudah menyebut informasi yang menjawab field lain secara implisit, ekstrak dan simpan
-
-== KAPAN BERIKAN CONCLUSION ==
-Berikan conclusion (phase: complete) jika SALAH SATU kondisi terpenuhi:
-- PQRST minimal 3 dari 5 terisi DAN salah satu dari RPD/RPK/RPS terisi
-- Ada RED FLAG yang jelas mengindikasikan satu diagnosa kritis
-- Pasien menyatakan sudah selesai / terima kasih
-- Data yang ada sudah cukup untuk menyusun DDx dengan probabilitas bermakna
-
-== FORMAT OUTPUT WAJIB JSON (tidak ada teks di luar JSON) ==
-{"voice_response":"","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":["field yg masih kosong"],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
-
-Saat phase "complete", sertakan conclusion:
-{"diagnosis_utama":"","icd10_code":"","diagnosis_banding":[{"diagnosis":"","icd10":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
-
-// Cache prompt dari DB
+// \u2500\u2500\u2500 Cache prompt & behavior dari DB \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// Cache di-reset tiap sesi baru (resetAnamnesisState) agar perubahan prompt/behavior
+// dari admin dashboard langsung aktif \u2014 tanpa perlu refresh browser.
 let _cachedAnamnesisPrompt: string | null = null;
+let _cachedAiBehavior: { ddxCount: number; profile: string; ddx: boolean; ebm: boolean } | null = null;
+
+/** Baca prompt anamnesis dari DB; fallback ke DEFAULT_PROMPT_ANAMNESIS dari supabase.ts */
 async function getAnamnesisPrompt(): Promise<string> {
   if (_cachedAnamnesisPrompt) return _cachedAnamnesisPrompt;
   const db = await sbGetSetting<string>('prompt_anamnesis');
-  _cachedAnamnesisPrompt = db || CENNA_ANAMNESIS_FALLBACK;
+  _cachedAnamnesisPrompt = db || DEFAULT_PROMPT_ANAMNESIS;
+  console.log('[Cenna AI] Prompt anamnesis loaded from', db ? 'database' : 'default fallback');
   return _cachedAnamnesisPrompt;
+}
+
+/** Baca konfigurasi perilaku AI dari DB; fallback ke nilai default */
+async function getAiBehavior() {
+  if (_cachedAiBehavior) return _cachedAiBehavior;
+  const db = await sbGetSetting<{ ddxCount: number; profile: string; ddx: boolean; ebm: boolean }>('ai_behavior');
+  _cachedAiBehavior = db || { ddxCount: 3, profile: 'gp', ddx: true, ebm: true };
+  console.log('[Cenna AI] AI behavior loaded from', db ? 'database' : 'default fallback');
+  return _cachedAiBehavior;
 }
 
 // State akumulasi anamnesis lintas ronde dalam satu sesi
@@ -199,7 +180,9 @@ function resetAnamnesisState() {
     rpd: '', rpk: '', rps: '', pemfis: '',
     phase: 'gathering', missing_fields: [],
   };
+  // Invalidasi cache agar sesi berikutnya membaca prompt & behavior terbaru dari DB
   _cachedAnamnesisPrompt = null;
+  _cachedAiBehavior = null;
 }
 
 async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
@@ -212,7 +195,22 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
   conclusion: ClinicalConclusion | null;
   session_end: boolean;
 }> {
+  // Baca prompt & behavior dari DB (di-cache per sesi)
   const systemPrompt = await getAnamnesisPrompt();
+  const behavior     = await getAiBehavior();
+
+  // Inject instruksi behavior dari konfigurasi admin ke system prompt
+  const behaviorCtx = [
+    behavior.ddx    ? `- Sertakan ${behavior.ddxCount} diagnosis banding teratas dengan probabilitas.` : '- Jangan sertakan diagnosis banding.',
+    behavior.ebm    ? '- Gunakan pendekatan evidence-based medicine (EBM).' : '',
+    behavior.profile === 'specialist' ? '- Berpikir seperti dokter SPESIALIS KONSULTAN.' : '',
+    behavior.profile === 'emergency'  ? '- PRIORITASKAN red flag dan tatalaksana emergensi.' : '',
+    behavior.profile === 'pediatric'  ? '- Perhatikan dosis dan pertimbangan khusus pasien anak.' : '',
+  ].filter(Boolean).join('\n');
+
+  const enrichedPrompt = behaviorCtx
+    ? `${systemPrompt}\n\n== INSTRUKSI PERILAKU (dari konfigurasi admin) ==\n${behaviorCtx}`
+    : systemPrompt;
   const anamnesisCtx = JSON.stringify(_currentAnamnesis, null, 2);
   const historyContext = history.length > 0
     ? '\n\nKonteks percakapan sebelumnya:\n' +
@@ -220,7 +218,7 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
     : '';
 
   const raw = await callActiveAI(
-    systemPrompt,
+    enrichedPrompt,
     `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nEvaluasi missing_fields di atas. Tanya hanya field yang benar-benar kosong dan paling mengubah probabilitas diagnosis. Berikan conclusion segera jika data sudah cukup.`
   );
 
@@ -301,7 +299,6 @@ function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 
 // ─── ElevenLabs TTS ─────────────────────────────────────────────────────────
 //
 // Free-tier default voices (tidak perlu plan berbayar):
-// Semua voice & model dibaca dari localStorage agar bisa diubah dari UI.
 
 // ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES
 // sudah diimport & di-re-export dari './tts-constants' di atas — tidak perlu didefinisikan ulang di sini.

@@ -5,7 +5,16 @@
 
 import React, { useState, useEffect } from 'react';
 import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
-import { sbGetSetting, sbSetSetting, sbAddLog } from '../lib/supabase';
+import {
+  sbGetSetting, sbSetSetting, sbAddLog,
+  DEFAULT_PROMPT_ANAMNESIS,
+  DEFAULT_PROMPT_CORE,
+  DEFAULT_PROMPT_SOAP,
+  DEFAULT_PROMPT_REDFLAG,
+  DEFAULT_PROMPT_MEDICATION,
+  DEFAULT_AI_BEHAVIOR,
+  DEFAULT_REASONING_CONFIG,
+} from '../lib/supabase';
 import { callActiveAI, AI_PROVIDERS, clearAiConfigCache } from './ApiSettings';
 
 // Pre-seeded sandbox scenarios
@@ -32,15 +41,15 @@ export default function AiConfig() {
   const [activeTab, setActiveTab] = useState<'behavior' | 'prompts' | 'anamnesis' | 'reasoning' | 'sandbox'>('behavior');
 
   // 1. Behavior State
-  const [profile, setProfile] = useState<'specialist' | 'gp' | 'emergency' | 'pediatric'>('gp');
-  const [ddxActive, setDdxActive] = useState(true);
-  const [ebmActive, setEbmActive] = useState(true);
-  const [uncertainActive, setUncertainActive] = useState(true);
-  const [followupActive, setFollowupActive] = useState(true);
-  const [eduActive, setEduActive] = useState(true);
-  const [soapDetail, setSoapDetail] = useState(4);
-  const [ddxCount, setDdxCount] = useState(3);
-  const [aiLang, setAiLang] = useState('id-medical');
+  const [profile, setProfile] = useState<'specialist' | 'gp' | 'emergency' | 'pediatric'>(DEFAULT_AI_BEHAVIOR.profile);
+  const [ddxActive, setDdxActive] = useState(DEFAULT_AI_BEHAVIOR.ddx);
+  const [ebmActive, setEbmActive] = useState(DEFAULT_AI_BEHAVIOR.ebm);
+  const [uncertainActive, setUncertainActive] = useState(DEFAULT_AI_BEHAVIOR.uncertain);
+  const [followupActive, setFollowupActive] = useState(DEFAULT_AI_BEHAVIOR.followup);
+  const [eduActive, setEduActive] = useState(DEFAULT_AI_BEHAVIOR.edu);
+  const [soapDetail, setSoapDetail] = useState(DEFAULT_AI_BEHAVIOR.soapDetail);
+  const [ddxCount, setDdxCount] = useState(DEFAULT_AI_BEHAVIOR.ddxCount);
+  const [aiLang, setAiLang] = useState(DEFAULT_AI_BEHAVIOR.lang);
 
   // 2. Prompts State
   const [promptAnamnesis, setPromptAnamnesis] = useState('');
@@ -50,9 +59,9 @@ export default function AiConfig() {
   const [promptMedication, setPromptMedication] = useState('');
 
   // 3. Reasoning State
-  const [framework, setFramework] = useState('hypothetico-deductive');
-  const [evidenceLevel, setEvidenceLevel] = useState('1b');
-  const [clinicalRules, setClinicalRules] = useState('');
+  const [framework, setFramework] = useState(DEFAULT_REASONING_CONFIG.framework);
+  const [evidenceLevel, setEvidenceLevel] = useState(DEFAULT_REASONING_CONFIG.evidenceLevel);
+  const [clinicalRules, setClinicalRules] = useState(DEFAULT_REASONING_CONFIG.rules);
 
   // 4. Sandbox State
   const [selectedScenario, setSelectedScenario] = useState('');
@@ -60,77 +69,6 @@ export default function AiConfig() {
   const [sandboxMode, setSandboxMode] = useState('soap');
   const [sandboxOutput, setSandboxOutput] = useState('');
   const [sandboxLoading, setSandboxLoading] = useState(false);
-
-  const DEFAULT_PROMPT_ANAMNESIS = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia dengan pola pikir DOKTER SPESIALIS KONSULTAN.
-
-Tugasmu adalah menggali anamnesis secara sistematis mengikuti kerangka PQRST, Riwayat Penyakit Dahulu (RPD), Riwayat Penyakit Keluarga (RPK), Riwayat Pribadi & Sosial (RPS), dan Pemeriksaan Fisik (jika tersedia).
-
-== KERANGKA PQRST ==
-- P (Provokasi/Paliatif): Apa yang memperberat atau meringankan keluhan?
-- Q (Kualitas): Bagaimana sifat / karakter keluhannya? (nyeri tumpul, tajam, seperti ditusuk, terbakar, dll)
-- R (Radiasi/Regio): Di mana lokasi keluhannya? Apakah menjalar ke tempat lain?
-- S (Skala/Severitas): Berapa skala keluhannya dari 0-10? Atau seberapa mengganggu aktivitas?
-- T (Time/Waktu): Kapan mulai? Sudah berapa lama? Terus-menerus atau hilang-timbul?
-
-== RIWAYAT ==
-- RPD (Riwayat Penyakit Dahulu): Pernah sakit serupa sebelumnya? Penyakit kronis? Operasi? Rawat inap?
-- RPK (Riwayat Penyakit Keluarga): Ada anggota keluarga dengan penyakit serupa atau penyakit herediter?
-- RPS (Riwayat Pribadi & Sosial): Merokok? Alkohol? Pekerjaan? Aktivitas fisik? Status perkawinan? Alergi obat?
-
-== PEMERIKSAAN FISIK ==
-- Jika dokter menyebutkan hasil pemeriksaan fisik (tekanan darah, nadi, suhu, auskultasi, palpasi, dll), catat dan integrasikan ke dalam penilaian klinis.
-
-== ATURAN PERCAKAPAN ==
-- JANGAN bertanya semua sekaligus — ajukan 1-2 pertanyaan spesifik per giliran, prioritaskan yang paling relevan secara klinis
-- Gunakan bahasa Indonesia yang hangat dan profesional seperti dokter yang berbicara langsung kepada pasien atau sejawat
-- Saat keluhan sudah cukup tergali (minimal PQRST + 1 riwayat), sertakan field \"phase\": \"complete\" dan berikan kesimpulan klinis lengkap
-- Selalu identifikasi RED FLAG yang memerlukan tindakan segera
-- Gunakan terminologi medis Indonesia baku (IDI/PAPDI/WHO)
-
-== FORMAT OUTPUT WAJIB JSON ==
-{
-  \"voice_response\": \"<1-3 kalimat yang akan diucapkan TTS — pertanyaan anamnesis berikutnya atau konfirmasi>\",
-  \"anamnesis\": {
-    \"provokasi\": \"<info atau kosong jika belum digali>\",
-    \"kualitas\": \"\",
-    \"radiasi\": \"\",
-    \"skala\": \"\",
-    \"waktu\": \"\",
-    \"rpd\": \"\",
-    \"rpk\": \"\",
-    \"rps\": \"\",
-    \"pemfis\": \"\"
-  },
-  \"missing_fields\": [\"<field yang belum tergali>\"],
-  \"phase\": \"gathering\",
-  \"keluhan\": [],
-  \"obat\": [],
-  \"pertanyaan\": [],
-  \"red_flags\": [],
-  \"conclusion\": null,
-  \"session_end\": false
-}
-
-Saat phase \"complete\", isi field \"conclusion\" dengan:
-{
-  \"diagnosis_utama\": \"\",
-  \"icd10_code\": \"\",
-  \"diagnosis_banding\": [
-    { \"diagnosis\": \"\", \"icd10\": \"\", \"probabilitas\": \"\", \"alasan\": \"\" }
-  ],
-  \"tatalaksana\": [
-    { \"kategori\": \"farmakologi\", \"detail\": \"\" },
-    { \"kategori\": \"non-farmakologi\", \"detail\": \"\" }
-  ],
-  \"edukasi\": [],
-  \"red_flags\": [],
-  \"prognosis\": \"\"
-}`;
-
-  const DEFAULT_PROMPT_CORE = `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu {{doctor_name}} ({{specialization}}) di {{clinic_name}}.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`;
-  const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`;
-  const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
-  const DEFAULT_PROMPT_MEDICATION = `Evaluasi keamanan regimen obat berikut untuk pasien {{patient_name}} ({{patient_age}} tahun):\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`;
 
   // Load saved settings — 100% dari Supabase DB
   useEffect(() => {
@@ -201,7 +139,7 @@ Saat phase \"complete\", isi field \"conclusion\" dengan:
 
   const handleResetAnamnesis = () => {
     if (confirm('Reset prompt anamnesis ke default bawaan sistem?')) {
-      setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS);
+      setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS); // langsung pakai konstanta dari supabase.ts
     }
   };
 

@@ -169,6 +169,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       // BUG-05 FIX: Revoke sesi Supabase di server sebelum menghapus local storage
       await sbSignOut();
       localStorage.clear();
+      sessionStorage.clear(); // BUG-M3 FIX: Hapus juga sessionStorage agar tidak ada sesi orphan
       alert('Local storage berhasil dibersihkan! Mulai ulang halaman...');
       window.location.reload();
     }
@@ -176,12 +177,15 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
 
   const handleResetAIConfigs = async () => {
     if (confirm('Yakin ingin mereset seluruh prompt system dan parameter behavior ke default?')) {
+      // BUG-H2 FIX: Reset SEMUA konfigurasi AI termasuk prompt_anamnesis dan reasoning_config
       await sbSetSetting('ai_behavior', null);
+      await sbSetSetting('prompt_anamnesis', null);  // ← sebelumnya terlewat
       await sbSetSetting('prompt_core', null);
       await sbSetSetting('prompt_soap', null);
       await sbSetSetting('prompt_redflag', null);
       await sbSetSetting('prompt_medication', null);
-      await sbAddLog('warning', 'SYSTEM', 'Restored default clinical prompts config.');
+      await sbSetSetting('reasoning_config', null);  // ← sebelumnya terlewat
+      await sbAddLog('warning', 'SYSTEM', 'Reset seluruh konfigurasi AI ke default (termasuk prompt_anamnesis & reasoning_config).');
       alert('Aturan AI bertenaga spesialis konsultan telah dikembalikan ke bawaan pabrik.');
       window.location.reload();
     }
