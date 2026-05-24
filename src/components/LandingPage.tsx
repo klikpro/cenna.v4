@@ -138,7 +138,81 @@ function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 
   return { keluhan, obat, pertanyaan };
 }
 
-// ─── Hook: wake-word listener (v5.2) ─────────────────────────────────────────
+// ─── ElevenLabs TTS ──────────────────────────────────────────────────────────────────
+//
+// Model  : eleven_flash_v2_5  (latensi rendah, real-time)
+// Voice  : Charlotte  — ID: XB0fDUnXU5powFXDhCwa
+// Fallback: browser speechSynthesis jika API key tidak ada / error
+
+const ELEVEN_VOICE_ID = 'XB0fDUnXU5powFXDhCwa'; // Charlotte
+const ELEVEN_MODEL_ID = 'eleven_flash_v2_5';
+
+async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
+  const apiKey =
+    (import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined) ||
+    localStorage.getItem('ELEVENLABS_API_KEY') ||
+    '';
+
+  if (!apiKey) {
+    console.warn('[Cenna TTS] No ElevenLabs API key — falling back to browser TTS');
+    speakBrowser(text, onEnd);
+    return;
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text,
+          model_id: ELEVEN_MODEL_ID,
+          voice_settings: {
+            stability: 0.45,
+            similarity_boost: 0.80,
+            style: 0.20,
+            use_speaker_boost: true,
+          },
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.warn('[Cenna TTS] ElevenLabs error:', res.status, err);
+      speakBrowser(text, onEnd);
+      return;
+    }
+
+    const blob   = await res.blob();
+    const url    = URL.createObjectURL(blob);
+    const audio  = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
+    await audio.play();
+    console.log('[Cenna TTS] ElevenLabs playing — Charlotte');
+  } catch (err) {
+    console.warn('[Cenna TTS] fetch error:', err);
+    speakBrowser(text, onEnd);
+  }
+}
+
+function speakBrowser(text: string, onEnd: () => void): void {
+  if (!('speechSynthesis' in window)) { onEnd(); return; }
+  window.speechSynthesis.cancel();
+  const utt     = new SpeechSynthesisUtterance(text);
+  utt.lang      = 'id-ID';
+  utt.rate      = 0.95;
+  utt.onend     = onEnd;
+  utt.onerror   = onEnd;
+  window.speechSynthesis.speak(utt);
+  // Chrome bug fallback
+  setTimeout(onEnd, 6000);
+}
 //
 // Perubahan dari v5.1:
 // - Hook mengelola mic permission sendiri (tidak bergantung prop `enabled`
@@ -639,21 +713,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       setPhase('listening');
     };
 
-    setTimeout(() => {
-      if (!('speechSynthesis' in window)) {
-        goListening();
-        return;
-      }
-      window.speechSynthesis.cancel();
-      const utt     = new SpeechSynthesisUtterance('Halo, saya Cenna. Silakan lanjutkan percakapan.');
-      utt.lang      = 'id-ID';
-      utt.rate      = 0.95;
-      utt.onend     = () => { console.log('[Cenna] TTS done → listening'); goListening(); };
-      utt.onerror   = () => goListening();
-      window.speechSynthesis.speak(utt);
-      // Hard fallback: Chrome kadang tidak fire onend
-      setTimeout(goListening, 5000);
-    }, 350);
+    // ElevenLabs TTS — Charlotte menyapa dokter
+    speakElevenLabs('Halo dokter, ada yang bisa Cenna bantu?', goListening);
   }, []);
 
   // Reset firedRef ketika phase kembali ke idle (setelah popup/close)

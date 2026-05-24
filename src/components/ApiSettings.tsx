@@ -289,6 +289,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [sttKey, setSttKey] = useState('');
   const [sttProvider, setSttProvider] = useState('openai-whisper');
   const [sttLang, setSttLang] = useState('id');
+  const [elevenLabsKey, setElevenLabsKey] = useState('');
 
   const currentProviderDef = AI_PROVIDERS.find(p => p.id === activeProvider) || AI_PROVIDERS[0];
 
@@ -330,6 +331,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         setSttLang(localStorage.getItem('STT_LANG') || 'id');
       }
       setSttKey(localStorage.getItem('STT_API_KEY') || '');
+      setElevenLabsKey(localStorage.getItem('ELEVENLABS_API_KEY') || '');
     }
     loadSettings();
   }, []);
@@ -439,6 +441,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     localStorage.setItem('STT_API_KEY', sttKey.trim());
     localStorage.setItem('STT_PROVIDER', sttProvider);
     localStorage.setItem('STT_LANG', sttLang);
+    localStorage.setItem('ELEVENLABS_API_KEY', elevenLabsKey.trim());
     await sbSetSetting('api_stt_config', {
       provider: sttProvider,
       lang: sttLang,
@@ -706,6 +709,35 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               <input id="api-stt-key" type="password" value={sttKey} onChange={e => setSttKey(e.target.value)}
                 placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+            </div>
+          </div>
+
+          {/* ElevenLabs TTS Section */}
+          <div className="border-t border-gray-100 pt-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-[#1e2a4a]">🎙️ ElevenLabs TTS — Suara Cenna</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">Suara Charlotte (eleven_flash_v2_5) untuk sapaan wake word</p>
+              </div>
+              <a href="https://elevenlabs.io" target="_blank" rel="noreferrer"
+                className="text-[10px] text-blue-500 hover:underline">Dapatkan Key ↗</a>
+            </div>
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">ElevenLabs API Key</label>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="api-elevenlabs-key"
+                  type="password"
+                  value={elevenLabsKey}
+                  onChange={e => setElevenLabsKey(e.target.value)}
+                  placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]"
+                />
+                {elevenLabsKey && (
+                  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold whitespace-nowrap">✓ Key ada</span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-400">Voice: Charlotte · Model: eleven_flash_v2_5 · Fallback ke browser TTS jika kosong</p>
             </div>
           </div>
           <div className="pt-4 border-t border-gray-100">
