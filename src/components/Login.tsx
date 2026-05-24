@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { getSupabaseClient } from '../lib/supabase';
+import { sbSignIn } from '../lib/supabase';
 
 interface LoginProps {
   onLoginSuccess: (session: any) => void;
@@ -29,52 +29,11 @@ export default function Login({ onLoginSuccess, onBackClick }: LoginProps) {
     setLoading(true);
 
     try {
-      const client = getSupabaseClient();
-      if (!client) {
-        // Fallback to local demo checks
-        await new Promise((r) => setTimeout(r, 900));
-        if (email.trim() === 'admin@cennaai.id' && password === 'cenna2025') {
-          const mockSession = {
-            email: email.trim(),
-            role: 'owner',
-            name: 'dr. Reza Ariandes',
-            token: 'demo_' + Date.now(),
-            demo: true,
-          };
-          sessionStorage.setItem('cenna_admin', JSON.stringify(mockSession));
-          setSuccess('Login demo berhasil! Mengalihkan...');
-          setTimeout(() => {
-            onLoginSuccess(mockSession);
-          }, 800);
-        } else {
-          setError('Email atau password salah. (Gunakan demo: admin@cennaai.id / cenna2025)');
-        }
-      } else {
-        // Live Supabase Authentication
-        const { data, error: authErr } = await client.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (authErr) {
-          setError(authErr.message || 'Login gagal.');
-        } else if (data.session) {
-          const authSession = {
-            email: data.user.email,
-            role: 'admin',
-            name: data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'Admin',
-            token: data.session.access_token,
-            demo: false,
-          };
-          sessionStorage.setItem('cenna_admin', JSON.stringify(authSession));
-          setSuccess('Otentikasi berhasil! Mengalihkan...');
-          setTimeout(() => {
-            onLoginSuccess(authSession);
-          }, 800);
-        }
-      }
+      const session = await sbSignIn(email.trim(), password);
+      setSuccess('Otentikasi berhasil! Mengalihkan...');
+      setTimeout(() => onLoginSuccess(session), 800);
     } catch (e: any) {
-      setError(e.message || 'Terjadi kesalahan sistem.');
+      setError(e.message || 'Email atau password salah.');
     } finally {
       setLoading(false);
     }
@@ -187,11 +146,6 @@ export default function Login({ onLoginSuccess, onBackClick }: LoginProps) {
               ← Kembali ke Beranda
             </button>
           </div>
-        </div>
-
-        {/* Info label credentials bottom */}
-        <div className="p-3 bg-white/5 border border-white/10 rounded-xl mt-6 text-center text-[11px] text-white/50 w-full">
-          💡 Demo Mode: <span className="text-white font-mono">admin@cennaai.id</span> / <span className="text-white font-mono">cenna2025</span>
         </div>
       </div>
     </div>

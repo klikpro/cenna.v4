@@ -15,15 +15,13 @@ import ApiSettings from './components/ApiSettings';
 import AuditLog from './components/AuditLog';
 import Settings from './components/Settings';
 import {
-  getLocalDoctors,
-  saveLocalDoctors,
-  getLocalDrugs,
-  saveLocalDrugs,
-  getLocalIcd,
-  saveLocalIcd,
-  getLocalLogs,
-  saveLocalLogs,
-  addLocalLog,
+  getSupabaseClient,
+  sbGetSession,
+  sbSignOut,
+  sbGetDoctors, sbUpsertDoctor, sbDeleteDoctor,
+  sbGetDrugs,   sbUpsertDrug,  sbDeleteDrug,
+  sbGetIcd,     sbUpsertIcd,   sbDeleteIcd, sbImportIcd,
+  sbGetLogs,    sbAddLog,      sbClearLogs,
 } from './lib/supabase';
 import { Doctor, Drug, IcdCode, AuditLogEntry } from './types';
 
@@ -39,9 +37,15 @@ type ActivePage =
   | 'logs'
   | 'settings';
 
+/** Detect if the current URL path starts with /admin */
+function isAdminRoute(): boolean {
+  return window.location.pathname.startsWith('/admin');
+}
+
 export default function App() {
   const [page, setPage] = useState<ActivePage>('landing');
   const [adminSession, setAdminSession] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
   // Global synchronized states
   const [doctors, setDoctors] = useState<Doctor[]>([]);
@@ -49,137 +53,129 @@ export default function App() {
   const [icdCodes, setIcdCodes] = useState<IcdCode[]>([]);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
 
-  // Local storage trigger on mount
+  // ─ Boot: restore session from Supabase Auth (token auto-refresh) ───────────
   useEffect(() => {
-    setDoctors(getLocalDoctors());
-    setDrugs(getLocalDrugs());
-    setIcdCodes(getLocalIcd());
-    setLogs(getLocalLogs());
-
-    const session = sessionStorage.getItem('cenna_admin');
-    if (session) {
-      setAdminSession(JSON.parse(session));
-      setPage('dashboard');
+    async function boot() {
+      const session = await sbGetSession();
+      if (session) {
+        setAdminSession(session);
+        await loadAllData(session.name);
+        setPage('dashboard');
+      } else if (isAdminRoute()) {
+        // /admin URL but no session → show login
+        setPage('login');
+      }
+      setLoading(false);
     }
+    boot();
   }, []);
 
-  const handleLoginSuccess = (session: any) => {
+  async function loadAllData(userName: string) {
+    const [d, dr, ic, lg] = await Promise.all([
+      sbGetDoctors(),
+      sbGetDrugs(),
+      sbGetIcd(),
+      sbGetLogs(),
+    ]);
+    setDoctors(d);
+    setDrugs(dr);
+    setIcdCodes(ic);
+    setLogs(lg);
+  }
+
+  const handleLoginSuccess = async (session: any) => {
     setAdminSession(session);
-    setLogs(getLocalLogs()); // reload logs
+    await loadAllData(session.name);
     setPage('dashboard');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (confirm('Yakin ingin keluar dari Admin Panel?')) {
-      sessionStorage.removeItem('cenna_admin');
+      await sbSignOut();
       setAdminSession(null);
-      setPage('landing');
+      // Return to landing or /admin login depending on route
+      if (isAdminRoute()) {
+        setPage('login');
+      } else {
+        setPage('landing');
+      }
     }
   };
 
   // Doctors Mutations
-  const handleSaveDoctor = (newDoc: Doctor) => {
-    const list = [...doctors];
-    const idx = list.findIndex((x) => x.id === newDoc.id);
-    if (idx >= 0) {
-      list[idx] = newDoc;
-      addLocalLog('success', 'DOCTOR', `Profil dokter "${newDoc.name}" diperbarui.`);
-    } else {
-      list.unshift(newDoc);
-      addLocalLog('success', 'DOCTOR', `Dokter baru "${newDoc.name}" ditambahkan.`);
-    }
-    setDoctors(list);
-    saveLocalDoctors(list);
-    setLogs(getLocalLogs());
+  const handleSaveDoctor = async (newDoc: Doctor) => {
+    const isNew = !doctors.find(x => x.id === newDoc.id);
+    await sbUpsertDoctor(newDoc);
+    setDoctors(prev => isNew ? [newDoc, ...prev] : prev.map(x => x.id === newDoc.id ? newDoc : x));
+    await sbAddLog('success', 'DOCTOR', `Profil dokter "${newDoc.name}" ${isNew ? 'ditambahkan' : 'diperbarui'}.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
-  const handleDeleteDoctor = (id: string) => {
-    const target = doctors.find((x) => x.id === id);
-    const list = doctors.filter((x) => x.id !== id);
-    setDoctors(list);
-    saveLocalDoctors(list);
-    addLocalLog('warning', 'DOCTOR', `Dokter "${target?.name || id}" dihapus dari sistem.`);
-    setLogs(getLocalLogs());
+  const handleDeleteDoctor = async (id: string) => {
+    const target = doctors.find(x => x.id === id);
+    await sbDeleteDoctor(id);
+    setDoctors(prev => prev.filter(x => x.id !== id));
+    await sbAddLog('warning', 'DOCTOR', `Dokter "${target?.name || id}" dihapus dari sistem.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
   // Drugs Mutations
-  const handleSaveDrug = (newDrug: Drug) => {
-    const list = [...drugs];
-    const idx = list.findIndex((x) => x.id === newDrug.id);
-    if (idx >= 0) {
-      list[idx] = newDrug;
-      addLocalLog('success', 'DRUG', `Obat "${newDrug.generic}" diperbarui di formularium.`);
-    } else {
-      list.unshift(newDrug);
-      addLocalLog('success', 'DRUG', `Obat baru "${newDrug.generic}" didaftarkan.`);
-    }
-    setDrugs(list);
-    saveLocalDrugs(list);
-    setLogs(getLocalLogs());
+  const handleSaveDrug = async (newDrug: Drug) => {
+    const isNew = !drugs.find(x => x.id === newDrug.id);
+    await sbUpsertDrug(newDrug);
+    setDrugs(prev => isNew ? [newDrug, ...prev] : prev.map(x => x.id === newDrug.id ? newDrug : x));
+    await sbAddLog('success', 'DRUG', `Obat "${newDrug.generic}" ${isNew ? 'didaftarkan' : 'diperbarui'}.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
-  const handleDeleteDrug = (id: string) => {
-    const target = drugs.find((x) => x.id === id);
-    const list = drugs.filter((x) => x.id !== id);
-    setDrugs(list);
-    saveLocalDrugs(list);
-    addLocalLog('warning', 'DRUG', `Obat "${target?.generic || id}" dihapus.`);
-    setLogs(getLocalLogs());
+  const handleDeleteDrug = async (id: string) => {
+    const target = drugs.find(x => x.id === id);
+    await sbDeleteDrug(id);
+    setDrugs(prev => prev.filter(x => x.id !== id));
+    await sbAddLog('warning', 'DRUG', `Obat "${target?.generic || id}" dihapus.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
   // ICD Mutations
-  const handleSaveIcd = (newCode: IcdCode) => {
-    const list = [...icdCodes];
-    const idx = list.findIndex((x) => x.id === newCode.id);
-    if (idx >= 0) {
-      list[idx] = newCode;
-      addLocalLog('success', 'SYSTEM', `Kode ICD-10 "${newCode.code}" diperbarui.`);
-    } else {
-      list.unshift(newCode);
-      addLocalLog('success', 'SYSTEM', `Kode custom ICD-10 "${newCode.code}" ditambahkan.`);
-    }
-    setIcdCodes(list);
-    saveLocalIcd(list);
-    setLogs(getLocalLogs());
+  const handleSaveIcd = async (newCode: IcdCode) => {
+    const isNew = !icdCodes.find(x => x.id === newCode.id);
+    await sbUpsertIcd(newCode);
+    setIcdCodes(prev => isNew ? [newCode, ...prev] : prev.map(x => x.id === newCode.id ? newCode : x));
+    await sbAddLog('success', 'SYSTEM', `Kode ICD-10 "${newCode.code}" ${isNew ? 'ditambahkan' : 'diperbarui'}.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
-  const handleDeleteIcd = (id: string) => {
-    const target = icdCodes.find((x) => x.id === id);
-    const list = icdCodes.filter((x) => x.id !== id);
-    setIcdCodes(list);
-    saveLocalIcd(list);
-    addLocalLog('warning', 'SYSTEM', `Kode ICD-10 "${target?.code || id}" dihapus.`);
-    setLogs(getLocalLogs());
+  const handleDeleteIcd = async (id: string) => {
+    const target = icdCodes.find(x => x.id === id);
+    await sbDeleteIcd(id);
+    setIcdCodes(prev => prev.filter(x => x.id !== id));
+    await sbAddLog('warning', 'SYSTEM', `Kode ICD-10 "${target?.code || id}" dihapus.`, adminSession?.name);
+    setLogs(await sbGetLogs());
   };
 
-  const handleImportIcdCodes = (newCodes: IcdCode[]) => {
-    const list = [...newCodes, ...icdCodes];
-    setIcdCodes(list);
-    saveLocalIcd(list);
-    addLocalLog('success', 'SYSTEM', `Mengimpor ${newCodes.length} kode ICD-10.`);
-    setLogs(getLocalLogs());
+  const handleImportIcdCodes = async (newCodes: IcdCode[]) => {
+    await sbImportIcd(newCodes);
+    setIcdCodes(await sbGetIcd());
+    await sbAddLog('success', 'SYSTEM', `Mengimpor ${newCodes.length} kode ICD-10.`, adminSession?.name);
+    setLogs(await sbGetLogs());
     alert(`Sukses mengimpor ${newCodes.length} kode ICD-10!`);
   };
 
-  const handleClearLogs = () => {
+  const handleClearLogs = async () => {
     if (confirm('Bersihkan seluruh log audit terekam?')) {
-      const remaining: AuditLogEntry[] = [
-        {
-          id: 'sys_init',
-          ts: new Date().toISOString().replace('T', ' ').substring(0, 19),
-          level: 'info',
-          category: 'SYSTEM',
-          message: 'Log audit dipaksa bersih secara manual.',
-          user: adminSession?.name || 'Admin',
-          ip: '127.0.0.1',
-        },
-      ];
-      setLogs(remaining);
-      saveLocalLogs(remaining);
+      await sbClearLogs(adminSession?.name || 'Admin');
+      setLogs(await sbGetLogs());
     }
   };
 
-  const isDemo = !localStorage.getItem('SUPABASE_ANON_KEY');
+  // ─ Loading splash ─────────────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0d1a36] flex items-center justify-center">
+        <div className="text-white/60 text-sm animate-pulse">Memuat CENNA AI…</div>
+      </div>
+    );
+  }
 
   // Route rendering coordinators
   if (page === 'landing') {
@@ -394,7 +390,7 @@ export default function App() {
               doctors={doctors}
               logs={logs}
               onNavigate={(val) => setPage(val as any)}
-              isDemoMode={isDemo}
+              isDemoMode={false}
             />
           )}
 

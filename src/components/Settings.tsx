@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { PlatformSettings, NotificationSettings, BrandingSettings } from '../types';
-import { addLocalLog } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbAddLog } from '../lib/supabase';
 
 interface SettingsProps {
   onAdminProfileUpdated: (name: string) => void;
@@ -37,40 +37,31 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   const [colorAccent, setColorAccent] = useState('#b8a898');
 
   useEffect(() => {
-    // Load local
-    const pStored = localStorage.getItem('PLATFORM_SETTINGS');
-    if (pStored) {
-      try {
-        const p: PlatformSettings = JSON.parse(pStored);
+    async function loadSettings() {
+      const p = await sbGetSetting<PlatformSettings>('platform');
+      if (p) {
         setPlatformName(p.name);
         setPlatformOrg(p.org);
         setPlatformEmail(p.email);
         setPlatformPhone(p.phone);
         setPlatformTz(p.tz);
         setPlatformAddress(p.address);
-      } catch (e) {}
-    }
-
-    const bStored = localStorage.getItem('BRANDING_SETTINGS');
-    if (bStored) {
-      try {
-        const b: BrandingSettings = JSON.parse(bStored);
+      }
+      const b = await sbGetSetting<BrandingSettings>('branding');
+      if (b) {
         setBrandTagline(b.tagline);
         setColorPrimary(b.colorPrimary);
         setColorAccent(b.colorAccent);
-      } catch (e) {}
+      }
+      const session = sessionStorage.getItem('cenna_admin');
+      if (session) {
+        try { setAdminName(JSON.parse(session).name || ''); } catch (e) {}
+      }
     }
-
-    const session = sessionStorage.getItem('cenna_admin');
-    if (session) {
-      try {
-        const s = JSON.parse(session);
-        setAdminName(s.name || s.email || '');
-      } catch (e) {}
-    }
+    loadSettings();
   }, []);
 
-  const handleSavePlatform = () => {
+  const handleSavePlatform = async () => {
     const payload: PlatformSettings = {
       name: platformName.trim(),
       org: platformOrg.trim(),
@@ -80,12 +71,12 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       currency: 'IDR',
       address: platformAddress.trim(),
     };
-    localStorage.setItem('PLATFORM_SETTINGS', JSON.stringify(payload));
-    addLocalLog('success', 'SYSTEM', 'Platform profile settings saved.');
+    await sbSetSetting('platform', payload);
+    await sbAddLog('success', 'SYSTEM', 'Platform profile settings saved.');
     alert('Informasi platform klinik berhasil diperbarui!');
   };
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (!adminName.trim()) {
       alert('Nama lengkap administrator wajib diisi.');
       return;
@@ -94,24 +85,14 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       alert('Konfirmasi sandi rahasia tidak cocok.');
       return;
     }
-
-    const sessionRaw = sessionStorage.getItem('cenna_admin');
-    if (sessionRaw) {
-      try {
-        const s = JSON.parse(sessionRaw);
-        s.name = adminName.trim();
-        sessionStorage.setItem('cenna_admin', JSON.stringify(s));
-      } catch (e) {}
-    }
-
     onAdminProfileUpdated(adminName.trim());
-    addLocalLog('success', 'SYSTEM', 'Admin profile parameters modified.');
+    await sbAddLog('success', 'SYSTEM', 'Admin profile parameters modified.');
     alert('Akun profil administrator diperbarui!');
     setAdminPass('');
     setAdminPassConfirm('');
   };
 
-  const handleSaveBranding = () => {
+  const handleSaveBranding = async () => {
     const payloadHandler: BrandingSettings = {
       brand: platformName.trim(),
       tagline: brandTagline.trim(),
@@ -120,30 +101,27 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       colorAccent,
       colorAccentHex: colorAccent,
     };
-    localStorage.setItem('BRANDING_SETTINGS', JSON.stringify(payloadHandler));
-    addLocalLog('success', 'SYSTEM', 'Platform customized visual variables saved.');
+    await sbSetSetting('branding', payloadHandler);
+    await sbAddLog('success', 'SYSTEM', 'Platform customized visual variables saved.');
     alert('Aturan visual branding klinik di-lock!');
   };
 
   const handleClearCache = () => {
     if (confirm('Yakin ingin membersihkan seluruh data simpanan browser? Semua setting API Anda harus diketik ulang.')) {
       localStorage.clear();
-      addLocalLog('critical', 'SYSTEM', 'Forced total local storage cache deletion.');
       alert('Local storage berhasil dibersihkan! Mulai ulang halaman...');
       window.location.reload();
     }
   };
 
-  const handleResetAIConfigs = () => {
+  const handleResetAIConfigs = async () => {
     if (confirm('Yakin ingin mereset seluruh prompt system dan parameter behavior ke default?')) {
-      localStorage.removeItem('AI_BEHAVIOR');
-      localStorage.removeItem('PROMPT_CORE');
-      localStorage.removeItem('PROMPT_SOAP');
-      localStorage.removeItem('PROMPT_REDFLAG');
-      localStorage.removeItem('PROMPT_MEDICATION');
-      localStorage.removeItem('REASONING_CONFIG');
-      localStorage.removeItem('SOAP_CONFIG');
-      addLocalLog('warning', 'SYSTEM', 'Restored default clinical prompts config.');
+      await sbSetSetting('ai_behavior', null);
+      await sbSetSetting('prompt_core', null);
+      await sbSetSetting('prompt_soap', null);
+      await sbSetSetting('prompt_redflag', null);
+      await sbSetSetting('prompt_medication', null);
+      await sbAddLog('warning', 'SYSTEM', 'Restored default clinical prompts config.');
       alert('Aturan AI bertenaga spesialis konsultan telah dikembalikan ke bawaan pabrik.');
       window.location.reload();
     }

@@ -1,0 +1,11 @@
+# Supabase Configuration
+VITE_SUPABASE_URL="https://xgpmexxgxbrzzwcdvzsk.supabase.co"
+VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncG1leHhneGJyenp3Y2R2enNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyNzUxODYsImV4cCI6MjA5NDg1MTE4Nn0.NA1R21ZS752U_od-pSofnjRvoN2zAIqXqFgdm_kIlPg"
+VITE_SUPABASE_SERVICE_ROLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncG1leHhneGJyenp3Y2R2enNrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTI3NTE4NiwiZXhwIjoyMDk0ODUxMTg2fQ.i2PlTC8OyB68TX8_73IziAH6Rk22EX4S4NguLvSuAbA"
+VITE_SUPABASE_REF="xgpmexxgxbrzzwcdvzsk"
+
+# Gemini AI (optional)
+GEMINI_API_KEY="AIzaSyDCllX2NxMzmzLY79n2dz9vpIHccQMA2Mk"
+
+# App URL
+APP_URL="https://xgpmexxgxbrzzwcdvzsk.supabase.co"
