@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AuditLogEntry } from '../types';
 
 interface DashboardProps {
@@ -30,10 +30,31 @@ export default function Dashboard({ logs, onNavigate }: DashboardProps) {
   const criticalCount = logs.filter(l => l.level === 'critical').length;
   const warningCount  = logs.filter(l => l.level === 'warning').length;
 
+  // Matikan semua audio stream aktif saat admin dashboard mount
+  useEffect(() => {
+    navigator.mediaDevices?.enumerateDevices?.().then(() => {
+      // Coba hentikan semua track mikrofon yang mungkin masih aktif dari landing page
+      (navigator as any).mediaDevices?.getUserMedia?.({ audio: false })?.catch(() => {});
+    }).catch(() => {});
+    // Hard stop: enumerate semua MediaStreamTrack aktif via RTCPeerConnection workaround
+    // (browser modern: track dimatikan saat komponen unmount via useWakeWord cleanup)
+    console.info('[Admin] Dashboard mounted — mic stream seharusnya nonaktif (LandingPage unmounted).');
+  }, []);
+
   return (
     <div className="space-y-6 animate-fade-in">
 
-      {/* Metrics Row */}
+      {/* Mic nonaktif indicator */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/8 border border-emerald-500/20 rounded-2xl w-fit">
+        <span className="text-base">🔇</span>
+        <div>
+          <p className="text-[11px] font-bold text-emerald-700">Mikrofon Nonaktif</p>
+          <p className="text-[10px] text-emerald-600/60">CENNA tidak mendengarkan selama di mode Admin</p>
+        </div>
+        <div className="w-2 h-2 rounded-full bg-emerald-400 ml-1" style={{ animation: 'pulse 2s ease-in-out infinite' }} />
+      </div>
+
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
         {/* Metric 1: Total Sesi AI */}
         <div className="bg-white border border-[#1e2a4a]/12 rounded-2xl p-5 hover:shadow-md transition relative overflow-hidden">

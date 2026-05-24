@@ -40,6 +40,9 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   const [logoUploading, setLogoUploading] = useState(false);
   const logoInputRef = React.useRef<HTMLInputElement>(null);
 
+  // 5. Orb visual model
+  const [orbVisualModel, setOrbVisualModel] = useState<'classic' | 'aurora' | 'pulse' | 'wave'>('classic');
+
   useEffect(() => {
     async function loadSettings() {
       const p = await sbGetSetting<PlatformSettings>('platform');
@@ -58,6 +61,8 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
         setColorAccent(b.colorAccent);
         if (b.logoUrl) setLogoUrl(b.logoUrl);
       }
+      const orbModel = await sbGetSetting<string>('orb_visual_model');
+      if (orbModel) setOrbVisualModel(orbModel as 'classic' | 'aurora' | 'pulse' | 'wave');
       const session = sessionStorage.getItem('cenna_admin');
       if (session) {
         try { setAdminName(JSON.parse(session).name || ''); } catch (e) {}
@@ -482,6 +487,64 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
               className="w-full py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
             >
               Lock Visual Branding
+            </button>
+          </div>
+
+
+          {/* Card: Tampilan Orb */}
+          <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-sm text-[#1e2a4a]">🔮 Tampilan Orb CENNA</h3>
+                <p className="text-[11px] text-[#1e2a4a]/40 mt-0.5">Visual model orb yang ditampilkan di halaman utama voice assistant.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {([
+                { key: 'classic', label: 'Classic Sphere', desc: 'Bola berputar elegan', emoji: '🌐', gradient: 'conic-gradient(from 0deg, #1e2a4a, #b8a898, #f5f0e8, #b8a898, #1e2a4a)' },
+                { key: 'aurora',  label: 'Aurora Blob',    desc: 'Cahaya lembut melayang', emoji: '✨', gradient: 'radial-gradient(circle at 40% 40%, #7F77DD88, #1e2a4a44)' },
+                { key: 'pulse',   label: 'Pulse Rings',    desc: 'Cincin berdetak',        emoji: '📡', gradient: 'radial-gradient(circle, #1e2a4a22, transparent)' },
+                { key: 'wave',    label: 'Liquid Wave',    desc: 'Gelombang cair dinamis', emoji: '🌊', gradient: 'linear-gradient(135deg, #1e2a4a, #b8a898, #1e2a4a)' },
+              ] as const).map(m => (
+                <button
+                  key={m.key}
+                  onClick={() => setOrbVisualModel(m.key)}
+                  className={`relative rounded-2xl p-3 border-2 text-left cursor-pointer transition-all ${
+                    orbVisualModel === m.key
+                      ? 'border-[#1e2a4a] bg-[#1e2a4a]/5'
+                      : 'border-[#1e2a4a]/12 bg-white hover:border-[#1e2a4a]/30'
+                  }`}
+                  style={{ background: 'none' }}
+                >
+                  <div className="flex items-center gap-3 mb-2">
+                    {/* Mini orb preview */}
+                    <div className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-base"
+                      style={{ background: m.gradient, border: '2px solid rgba(30,42,74,0.15)' }}>
+                      {m.emoji}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-[#1e2a4a]">{m.label}</p>
+                      <p className="text-[10px] text-[#1e2a4a]/45">{m.desc}</p>
+                    </div>
+                  </div>
+                  {orbVisualModel === m.key && (
+                    <span className="absolute top-2 right-2 text-[9px] font-bold text-[#1e2a4a] bg-[#1e2a4a]/10 px-1.5 py-0.5 rounded-full">
+                      ✓ Aktif
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <button
+              id="btn-save-orb-model"
+              onClick={async () => {
+                await sbSetSetting('orb_visual_model', orbVisualModel);
+                await sbAddLog('info', 'SYSTEM', `Orb visual model diubah ke: ${orbVisualModel}`);
+                alert(`✅ Model orb "${orbVisualModel}" disimpan! Refresh halaman utama untuk melihat perubahan.`);
+              }}
+              className="w-full py-2.5 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer"
+            >
+              💾 Simpan Model Orb
             </button>
           </div>
 
