@@ -268,7 +268,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
           style={{ filter: 'brightness(0) saturate(100%) invert(14%) sepia(27%) saturate(1200%) hue-rotate(196deg) brightness(95%) contrast(95%)' }} />
         <div className="flex flex-col leading-tight">
           <span className="text-[13px] font-semibold tracking-[0.22em] uppercase text-[#1e2a4a]"
-            style={{ fontFamily: "'DM Sans', sans-serif" }}>CENNA AI</span>
+            style={{ fontFamily: "'DM Sans', sans-serif" }}></span>
           <span className="text-[9px] tracking-[0.18em] uppercase text-[#b8a898]"
             style={{ fontFamily: "'DM Sans', sans-serif" }}>Clinical Intelligence</span>
         </div>
@@ -358,6 +358,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         {/* Brand text — NO subtitle */}
         <div className="mt-6 space-y-1">
           <h1 className="text-3xl font-light tracking-[0.22em] uppercase text-[#1e2a4a]"
+            style={{ fontFamily: "'DM Sans', sans-serif", letterSpacing: '0.24em' }}></h1>
         </div>
 
         {/* Wake-word status hint */}
