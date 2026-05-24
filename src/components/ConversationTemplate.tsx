@@ -22,6 +22,7 @@ function newStep(order: number): ConversationStep {
     id: newId(),
     order,
     label: `Step ${order}`,
+    trigger_text: '',
     response_text: '',
     next_question: '',
     orb_primary: '#1e2a4a',
@@ -164,25 +165,41 @@ function StepCard({ step, index, total, onChange, onDelete, onMoveUp, onMoveDown
         {/* Left: text fields */}
         <div className="space-y-3">
           <div>
+            <label className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: '#b45309' }}>
+              🎤 Yang Pengguna Ucapkan (Trigger)
+            </label>
+            <textarea
+              className="w-full text-xs text-[#1e2a4a] border rounded-xl p-3 outline-none resize-none transition placeholder:text-[#1e2a4a]/25"
+              style={{ background: '#fef9f0', borderColor: '#fde68a', focusBorderColor: '#f59e0b' }}
+              rows={2}
+              placeholder="Contoh: sakit kepala, nyeri kepala, pusing — (kosongkan = selalu cocok)"
+              value={step.trigger_text}
+              onChange={e => upd({ trigger_text: e.target.value })}
+            />
+            <p className="text-[9px] text-amber-600/60 mt-1 italic">
+              Fuzzy match — tidak harus persis sama. Kosongkan untuk sequential otomatis.
+            </p>
+          </div>
+          <div>
             <label className="text-[10px] font-bold text-[#1e2a4a]/45 tracking-widest uppercase block mb-1">
-              💬 Response CENNA (yang diucapkan)
+              💬 Response CENNA (yang diucapkan sebagai balasan)
             </label>
             <textarea
               className="w-full text-xs text-[#1e2a4a] bg-[#f8f5f0] border border-[#1e2a4a]/10 rounded-xl p-3 outline-none resize-none focus:border-[#1e2a4a]/30 transition placeholder:text-[#1e2a4a]/25"
               rows={3}
-              placeholder="Teks yang akan CENNA ucapkan pada step ini…"
+              placeholder="Teks yang akan CENNA ucapkan sebagai balasan atas trigger di atas…"
               value={step.response_text}
               onChange={e => upd({ response_text: e.target.value })}
             />
           </div>
           <div>
             <label className="text-[10px] font-bold text-[#1e2a4a]/45 tracking-widest uppercase block mb-1">
-              ❓ Pertanyaan Lanjutan (opsional)
+              ❓ Pertanyaan Lanjutan CENNA (opsional)
             </label>
             <textarea
               className="w-full text-xs text-[#1e2a4a] bg-[#f8f5f0] border border-[#1e2a4a]/10 rounded-xl p-3 outline-none resize-none focus:border-[#1e2a4a]/30 transition placeholder:text-[#1e2a4a]/25"
               rows={2}
-              placeholder="Pertanyaan yang diucapkan setelah response (kosongkan jika tidak ada)…"
+              placeholder="Pertanyaan yang CENNA tambahkan setelah response (opsional)…"
               value={step.next_question}
               onChange={e => upd({ next_question: e.target.value })}
             />
@@ -469,7 +486,7 @@ export default function ConversationTemplate() {
             </div>
             <div className="flex gap-2">
               <span className="text-[10px] text-[#1e2a4a]/35 italic">
-                Setelah semua step habis → CENNA fallback ke mode AI
+                Pengguna berbicara → fuzzy match trigger → CENNA menjawab → step berikutnya
               </span>
               <button
                 onClick={handleAddStep}

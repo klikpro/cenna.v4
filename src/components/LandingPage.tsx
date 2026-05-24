@@ -186,13 +186,48 @@ function resetAnamnesisState() {
     rpd: '', rpk: '', rps: '', pemfis: '',
     phase: 'gathering', missing_fields: [],
   };
-  // Invalidasi cache agar sesi berikutnya membaca prompt & behavior terbaru dari DB
   _cachedAnamnesisPrompt = null;
   _cachedAiBehavior = null;
   // Reset template state
   _activeTemplate = null;
   _templateStepIndex = 0;
   _templateDone = false;
+}
+
+/**
+ * Fuzzy match: cek apakah ucapan user cocok dengan trigger text sebuah step.
+ * Algoritma: normalkan keduanya, ambil kata signifikan (>3 huruf) dari trigger,
+ * jika setidaknya 50% kata tersebut muncul di ucapan user → match.
+ * Jika trigger kosong → selalu match (sequential mode).
+ */
+function fuzzyMatchTrigger(userSpeech: string, triggerText: string): boolean {
+  if (!triggerText || !triggerText.trim()) return true; // kosong = sequential, selalu match
+
+  const normalize = (s: string) =>
+    s.toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')  // hapus accent
+      .replace(/[^a-z0-9 ]/g, ' ')      // hanya huruf/angka/spasi
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const speech  = normalize(userSpeech);
+  const trigger = normalize(triggerText);
+
+  // Kata signifikan dari trigger (panjang > 3 char, bukan stop word pendek)
+  const STOP = new Set(['yang', 'dengan', 'dari', 'untuk', 'pada', 'adalah', 'ada', 'dan', 'atau']);
+  const words = trigger.split(' ').filter(w => w.length > 3 && !STOP.has(w));
+
+  // Jika tidak ada kata signifikan, coba substring match langsung
+  if (words.length === 0) return speech.includes(trigger);
+
+  // Hitung berapa kata trigger yang muncul di ucapan user
+  const matched = words.filter(w => speech.includes(w));
+  const threshold = Math.max(1, Math.ceil(words.length * 0.5)); // minimal 50%
+  const isMatch   = matched.length >= threshold;
+
+  console.log(`[Cenna Template] fuzzy: "${speech.slice(0, 50)}" vs trigger "${trigger.slice(0, 40)}" → ${matched.length}/${words.length} (need ${threshold}) → ${isMatch ? '✓' : '✗'}`);
+  return isMatch;
 }
 
 async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
@@ -1296,55 +1331,62 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const handleAmbientData = useCallback(async (data: CapturedData) => {
 
     // ─── TEMPLATE MODE ─────────────────────────────────────────────
+    // Alur: User bicara → fuzzy match trigger → CENNA respond → kembali listening
     if (_activeTemplate && !_templateDone) {
       const steps = _activeTemplate.steps;
-      const step  = steps[_templateStepIndex];
 
-      if (!step) {
-        // Semua step habis → fallback ke AI
-        _templateDone = true;
-        setTemplateOrbColors(null);
-        setTemplateModeName(null);
-        console.log('[Cenna] Template selesai → fallback ke AI mode');
-        // Jatuhkan ke blok AI di bawah (tidak return)
-      } else {
-        // Update orb colors sesuai step saat ini
-        setTemplateOrbColors({ primary: step.orb_primary, secondary: step.orb_secondary });
+      // Cari step dari indeks saat ini yang trigger-nya cocok dengan ucapan user
+      let matchedStep = null;
+      let matchedIdx  = _templateStepIndex;
 
-        // Gabungkan response + pertanyaan lanjutan
-        const fullResponse = step.next_question
-          ? `${step.response_text} ${step.next_question}`
-          : step.response_text;
-
-        _templateStepIndex++;
-
-        // Siapkan step berikutnya (prefetch color) jika ada
-        const nextStep = steps[_templateStepIndex];
-
-        setPhase('responding');
-        speak(fullResponse, () => {
-          if (nextStep) {
-            // Ada step berikutnya → kembali listening
-            setTemplateOrbColors({ primary: nextStep.orb_primary, secondary: nextStep.orb_secondary });
-            setPhase('listening');
-          } else {
-            // Ini step terakhir → fallback ke AI setelah ini
-            _templateDone = true;
-            setTemplateOrbColors(null);
-            setTemplateModeName(null);
-            setPhase('listening');
-          }
-        });
-
-        // Simpan data percakapan
-        sessionDataRef.current.push(data);
-        return; // JANGAN lanjut ke blok AI
+      for (let i = _templateStepIndex; i < steps.length; i++) {
+        if (fuzzyMatchTrigger(data.transcript, steps[i].trigger_text)) {
+          matchedStep = steps[i];
+          matchedIdx  = i;
+          break;
+        }
       }
+
+      if (!matchedStep) {
+        // Tidak ada step yang cocok — tunggu, kembali listening tanpa respond
+        console.log('[Cenna Template] Tidak ada step yang cocok, menunggu...');
+        setPhase('listening');
+        return;
+      }
+
+      // Cocok! Advance ke step berikutnya
+      _templateStepIndex = matchedIdx + 1;
+
+      // Update warna orb sesuai step yang matched
+      setTemplateOrbColors({ primary: matchedStep.orb_primary, secondary: matchedStep.orb_secondary });
+
+      // Gabungkan response + pertanyaan lanjutan jika ada
+      const fullResponse = matchedStep.next_question
+        ? `${matchedStep.response_text} ${matchedStep.next_question}`
+        : matchedStep.response_text;
+
+      setPhase('responding');
+      speak(fullResponse, () => {
+        if (_templateStepIndex >= steps.length) {
+          // Semua step sudah selesai → fallback ke AI mode
+          _templateDone = true;
+          setTemplateOrbColors(null);
+          setTemplateModeName(null);
+          console.log('[Cenna Template] Semua step selesai → fallback ke AI');
+        } else {
+          // Ada step berikutnya — prefetch warna step berikutnya
+          const nextStep = steps[_templateStepIndex];
+          setTemplateOrbColors({ primary: nextStep.orb_primary, secondary: nextStep.orb_secondary });
+        }
+        setPhase('listening');
+      });
+
+      sessionDataRef.current.push(data);
+      return; // JANGAN lanjut ke blok AI
     }
 
-    // ─── AI MODE (normal atau setelah template habis) ────────────────
+    // ─── AI MODE (normal atau setelah semua template step selesai) ───────
     if (!aiEnabled) {
-      // Mode dasar tanpa AI: langsung kembali listening
       setCapturedData(data);
       setPhase('listening');
       return;

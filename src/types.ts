@@ -79,8 +79,9 @@ export interface ConversationStep {
   id: string;
   order: number;               // urutan (1, 2, 3, ...)
   label: string;               // label untuk tampilan admin
-  response_text: string;       // teks yang diucapkan CENNA
-  next_question: string;       // pertanyaan lanjutan (kosong = tidak ada)
+  trigger_text: string;        // kata/kalimat yang user ucapkan (kosong = sequential auto)
+  response_text: string;       // teks yang diucapkan CENNA sebagai balasan
+  next_question: string;       // pertanyaan lanjutan setelah response (opsional)
   orb_primary: string;         // hex warna orb primer, e.g. "#1e2a4a"
   orb_secondary: string;       // hex warna orb sekunder, e.g. "#b8a898"
   bg_from: string;             // hex gradient bg awal, e.g. "#f8f5f0"
