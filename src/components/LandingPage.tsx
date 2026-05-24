@@ -496,11 +496,14 @@ async function speak(text: string, onEnd: () => void): Promise<void> {
 }
 
 function useWakeWord(onDetected: () => void, active: boolean) {
-  const recRef      = useRef<SpeechRecognition | null>(null);
-  const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runningRef  = useRef(false);
-  const activeRef   = useRef(active);
+  const recRef        = useRef<SpeechRecognition | null>(null);
+  const timerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runningRef    = useRef(false);
+  const activeRef     = useRef(active);
   const onDetectedRef = useRef(onDetected);
+  // FIX: Simpan MediaStream agar bisa di-stop saat unmount/navigasi ke admin
+  const streamRef     = useRef<MediaStream | null>(null);
+
   // Synchronous ref update — tidak tunggu re-render
   activeRef.current   = active;
   onDetectedRef.current = onDetected;
@@ -512,6 +515,12 @@ function useWakeWord(onDetected: () => void, active: boolean) {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
+    // FIX: Hentikan semua track MediaStream agar ikon mic di browser benar-benar off
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+      console.log('[Cenna wake] MediaStream tracks stopped — mic released');
+    }
     console.log('[Cenna wake] stopped');
   }, []);
   stopRef.current = stop;
@@ -596,7 +605,9 @@ function useWakeWord(onDetected: () => void, active: boolean) {
 
     // Minta mic permission di sini — hook mengelola sendiri
     navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => {
+      .then((stream) => {
+        // FIX: Simpan stream agar bisa dilepas saat unmount
+        streamRef.current = stream;
         console.log('[Cenna wake] mic granted, starting wake listener');
         start();
       })
@@ -604,6 +615,7 @@ function useWakeWord(onDetected: () => void, active: boolean) {
         console.warn('[Cenna wake] mic denied:', err);
       });
 
+    // Cleanup saat LandingPage unmount (misal: pindah ke halaman admin)
     return () => stop();
   }, [active, start, stop]);
 }
@@ -621,6 +633,8 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   const runningRef      = useRef(false);
   const transcriptRef   = useRef('');
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Catatan: ambient listener tidak memanggil getUserMedia sendiri.
+  // SpeechRecognition.abort() sudah cukup melepas mic secara internal.
 
   // Synchronous ref update
   const enabledRef = useRef(enabled);
@@ -648,8 +662,10 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   const stop = useCallback(() => {
     runningRef.current = false;
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    // abort() menghentikan SpeechRecognition dan melepas mic secara internal
     try { recRef.current?.abort(); } catch { /* ignore */ }
     recRef.current = null;
+    console.log('[Cenna ambient] stopped — mic released via SpeechRecognition.abort()');
   }, []);
 
   stopRef.current = stop;
@@ -708,6 +724,7 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
 
   useEffect(() => {
     if (enabled) { start(); } else { stop(); }
+    // Cleanup saat LandingPage unmount (misal: pindah ke halaman admin)
     return () => stop();
   }, [enabled, start, stop]);
 }
