@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
 import { addLocalLog, sbGetSetting, sbSetSetting } from '../lib/supabase';
-import { callActiveAI, AI_PROVIDERS } from './ApiSettings';
+import { callActiveAI, AI_PROVIDERS, clearAiConfigCache } from './ApiSettings';
 
 // Pre-seeded sandbox scenarios
 const SCENARIOS = {
@@ -65,50 +65,42 @@ export default function AiConfig() {
   const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
   const DEFAULT_PROMPT_MEDICATION = `Evaluasi keamanan regimen obat berikut untuk pasien {{patient_name}} ({{patient_age}} tahun):\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`;
 
-  // Load saved settings — prioritaskan Supabase, fallback ke localStorage
+  // Load saved settings — 100% dari Supabase DB
   useEffect(() => {
     async function loadSettings() {
-      // --- Prompts: coba dari Supabase dulu ---
+      // --- Prompts: dari Supabase ---
       const dbCore = await sbGetSetting<string>('prompt_core');
-      setPromptCore(dbCore || localStorage.getItem('PROMPT_CORE') || DEFAULT_PROMPT_CORE);
+      setPromptCore(dbCore || DEFAULT_PROMPT_CORE);
 
       const dbSoap = await sbGetSetting<string>('prompt_soap');
-      setPromptSoap(dbSoap || localStorage.getItem('PROMPT_SOAP') || DEFAULT_PROMPT_SOAP);
+      setPromptSoap(dbSoap || DEFAULT_PROMPT_SOAP);
 
       const dbRedflag = await sbGetSetting<string>('prompt_redflag');
-      setPromptRedflag(dbRedflag || localStorage.getItem('PROMPT_REDFLAG') || DEFAULT_PROMPT_REDFLAG);
+      setPromptRedflag(dbRedflag || DEFAULT_PROMPT_REDFLAG);
 
       const dbMedication = await sbGetSetting<string>('prompt_medication');
-      setPromptMedication(dbMedication || localStorage.getItem('PROMPT_MEDICATION') || DEFAULT_PROMPT_MEDICATION);
+      setPromptMedication(dbMedication || DEFAULT_PROMPT_MEDICATION);
 
-      // --- Behavior ---
+      // --- Behavior: dari Supabase ---
       const dbBehavior = await sbGetSetting<AIBehaviorSettings>('ai_behavior');
-      const behaviorSource = dbBehavior || (() => {
-        const stored = localStorage.getItem('AI_BEHAVIOR');
-        try { return stored ? JSON.parse(stored) : null; } catch { return null; }
-      })();
-      if (behaviorSource) {
-        setProfile(behaviorSource.profile);
-        setDdxActive(behaviorSource.ddx);
-        setEbmActive(behaviorSource.ebm);
-        setUncertainActive(behaviorSource.uncertain);
-        setFollowupActive(behaviorSource.followup);
-        setEduActive(behaviorSource.edu);
-        setSoapDetail(behaviorSource.soapDetail);
-        setDdxCount(behaviorSource.ddxCount);
-        setAiLang(behaviorSource.lang);
+      if (dbBehavior) {
+        setProfile(dbBehavior.profile);
+        setDdxActive(dbBehavior.ddx);
+        setEbmActive(dbBehavior.ebm);
+        setUncertainActive(dbBehavior.uncertain);
+        setFollowupActive(dbBehavior.followup);
+        setEduActive(dbBehavior.edu);
+        setSoapDetail(dbBehavior.soapDetail);
+        setDdxCount(dbBehavior.ddxCount);
+        setAiLang(dbBehavior.lang);
       }
 
-      // --- Reasoning ---
+      // --- Reasoning: dari Supabase ---
       const dbReasoning = await sbGetSetting<ReasoningConfig>('reasoning_config');
-      const reasoningSource = dbReasoning || (() => {
-        const stored = localStorage.getItem('REASONING_CONFIG');
-        try { return stored ? JSON.parse(stored) : null; } catch { return null; }
-      })();
-      if (reasoningSource) {
-        setFramework(reasoningSource.framework);
-        setEvidenceLevel(reasoningSource.evidenceLevel);
-        setClinicalRules(reasoningSource.rules);
+      if (dbReasoning) {
+        setFramework(dbReasoning.framework);
+        setEvidenceLevel(dbReasoning.evidenceLevel);
+        setClinicalRules(dbReasoning.rules);
       }
     }
     loadSettings();
@@ -126,17 +118,12 @@ export default function AiConfig() {
       ddxCount,
       lang: aiLang,
     };
-    localStorage.setItem('AI_BEHAVIOR', JSON.stringify(payload)); // fallback offline
     await sbSetSetting('ai_behavior', payload);
     addLocalLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
-    alert('Konfigurasi perilaku klinis berhasil disimpan!');
+    alert('Konfigurasi perilaku klinis berhasil disimpan ke database!');
   };
 
   const handleSavePrompts = async () => {
-    localStorage.setItem('PROMPT_CORE', promptCore); // fallback offline
-    localStorage.setItem('PROMPT_SOAP', promptSoap);
-    localStorage.setItem('PROMPT_REDFLAG', promptRedflag);
-    localStorage.setItem('PROMPT_MEDICATION', promptMedication);
     await Promise.all([
       sbSetSetting('prompt_core', promptCore),
       sbSetSetting('prompt_soap', promptSoap),
@@ -144,7 +131,7 @@ export default function AiConfig() {
       sbSetSetting('prompt_medication', promptMedication),
     ]);
     addLocalLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
-    alert('Seluruh kustomisasi prompt berhasil diperbarui!');
+    alert('Seluruh kustomisasi prompt berhasil diperbarui ke database!');
   };
 
   const handleSaveReasoning = async () => {
@@ -153,10 +140,9 @@ export default function AiConfig() {
       evidenceLevel,
       rules: clinicalRules,
     };
-    localStorage.setItem('REASONING_CONFIG', JSON.stringify(payload)); // fallback offline
     await sbSetSetting('reasoning_config', payload);
     addLocalLog('success', 'SYSTEM', 'Mengubah logika reasoning klinis AI.');
-    alert('Aturan reasoning engine berhasil diperbarui!');
+    alert('Aturan reasoning engine berhasil diperbarui ke database!');
   };
 
   const handleSelectScenario = (key: string) => {
@@ -174,8 +160,10 @@ export default function AiConfig() {
       return;
     }
     setSandboxLoading(true);
-    const activeProviderId = localStorage.getItem('AI_PROVIDER') || 'anthropic';
+    const dbAiCfg = await sbGetSetting<{ provider: string; model: string }>('api_ai_config');
+    const activeProviderId = dbAiCfg?.provider || 'anthropic';
     const activeProviderDef = AI_PROVIDERS.find(p => p.id === activeProviderId) || AI_PROVIDERS[0];
+    const activeModel = dbAiCfg?.model || activeProviderDef.defaultModel;
     setSandboxOutput(`⏳ CENNA AI menganalisis dengan ${activeProviderDef.icon} ${activeProviderDef.name}...\n\n`);
 
     try {
@@ -187,7 +175,7 @@ export default function AiConfig() {
         : 'Analisis dan deteksi Red Flag bahaya klinis kritis dari teks ini dalam format JSON';
 
       const result = await callActiveAI(systemPrompt, `${actionPrompt} dari teks kasus berikut:\n\n${sandboxInput}`);
-      setSandboxOutput(`[${activeProviderDef.icon} ${activeProviderDef.name} — ${localStorage.getItem('AI_MODEL') || activeProviderDef.defaultModel}]\n${'─'.repeat(55)}\n\n${result}`);
+      setSandboxOutput(`[${activeProviderDef.icon} ${activeProviderDef.name} — ${activeModel}]\n${'─'.repeat(55)}\n\n${result}`);
       addLocalLog('success', 'AI', `Sandbox test berhasil via ${activeProviderDef.name}.`);
     } catch (e: any) {
       // Fallback simulasi jika provider belum dikonfigurasi
@@ -264,7 +252,6 @@ export default function AiConfig() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Cards for specialty mapping */}
             <div
               onClick={() => setProfile('specialist')}
               className={`p-4 border-2 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
@@ -397,12 +384,10 @@ export default function AiConfig() {
           </div>
 
           <div className="space-y-4">
-            {/* Core Identity */}
             <div className="space-y-1">
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                 Core Identity Prompt (Rujukan cara berpikir dasar)
               </label>
-              {/* Clicks tags */}
               <div className="flex gap-2 flex-wrap pb-1">
                 {['{{doctor_name}}', '{{specialization}}', '{{clinic_name}}', '{{transcript}}'].map((tag) => (
                   <button
@@ -425,7 +410,6 @@ export default function AiConfig() {
               />
             </div>
 
-            {/* SOAP generator */}
             <div className="space-y-1">
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                 Pembentuk SOAP (SOAP Generator Prompts)
@@ -439,7 +423,6 @@ export default function AiConfig() {
               />
             </div>
 
-            {/* Red Flag */}
             <div className="space-y-1">
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                 Saringan Red Flags (Akut/Darurat)
@@ -602,8 +585,8 @@ export default function AiConfig() {
                 className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none disabled:opacity-50 cursor-pointer shadow-md"
               >
                 {sandboxLoading
-                  ? `⏳ ${AI_PROVIDERS.find(p => p.id === (localStorage.getItem('AI_PROVIDER') || 'anthropic'))?.icon || '🤖'} Menganalisis...`
-                  : `🧪 Jalankan via ${AI_PROVIDERS.find(p => p.id === (localStorage.getItem('AI_PROVIDER') || 'anthropic'))?.name || 'AI'}`}
+                  ? `⏳ Menganalisis...`
+                  : `🧪 Jalankan via AI Engine`}
               </button>
             </div>
 

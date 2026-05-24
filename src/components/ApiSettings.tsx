@@ -251,20 +251,59 @@ export const AI_PROVIDERS = [
   },
 ];
 
+// ─── In-memory cache untuk AI config (agar tidak hit DB tiap panggilan) ────────
+let _aiConfigCache: {
+  providerId: string;
+  apiKeys: Record<string, string>;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+} | null = null;
+
+export function clearAiConfigCache() {
+  _aiConfigCache = null;
+}
+
+export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
+  if (_aiConfigCache) return _aiConfigCache;
+
+  const dbAiConfig = await sbGetSetting<{
+    provider: string; model: string; temperature: number; maxTokens: number;
+  }>('api_ai_config');
+
+  const providerId = dbAiConfig?.provider || 'anthropic';
+  const provider   = AI_PROVIDERS.find(p => p.id === providerId) || AI_PROVIDERS[0];
+
+  // Baca semua API key per-provider dari DB
+  const apiKeys: Record<string, string> = {};
+  await Promise.all(
+    AI_PROVIDERS.map(async p => {
+      const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
+      if (k) apiKeys[p.id] = k;
+    })
+  );
+
+  _aiConfigCache = {
+    providerId,
+    apiKeys,
+    model:       dbAiConfig?.model       ?? provider.defaultModel,
+    temperature: dbAiConfig?.temperature ?? 0.3,
+    maxTokens:   dbAiConfig?.maxTokens   ?? 2048,
+  };
+  return _aiConfigCache;
+}
+
 // ─── Exported helper: call active AI provider ────────────────────────────────
 export async function callActiveAI(
   systemPrompt: string,
   userMsg: string,
 ): Promise<string> {
-  const providerId = localStorage.getItem('AI_PROVIDER') || 'anthropic';
-  const provider = AI_PROVIDERS.find(p => p.id === providerId) || AI_PROVIDERS[0];
-  const apiKey = localStorage.getItem(`AI_KEY_${providerId.toUpperCase()}`) || '';
-  const model = localStorage.getItem('AI_MODEL') || provider.defaultModel;
-  const temp = parseFloat(localStorage.getItem('AI_TEMPERATURE') || '0.3');
-  const maxTokens = parseInt(localStorage.getItem('AI_MAX_TOKENS') || '2048');
+  const cfg      = await loadAiConfigFromDb();
+  const provider = AI_PROVIDERS.find(p => p.id === cfg!.providerId) || AI_PROVIDERS[0];
+  const apiKey   = cfg!.apiKeys[provider.id] || '';
 
   if (!apiKey) throw new Error(`API Key untuk ${provider.name} belum dikonfigurasi.`);
-  return provider.callFn(apiKey, model, systemPrompt, userMsg, temp, maxTokens);
+  return provider.callFn(apiKey, cfg!.model, systemPrompt, userMsg, cfg!.temperature, cfg!.maxTokens);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -299,42 +338,45 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
   useEffect(() => {
     async function loadSettings() {
+      // ── Supabase bootstrap: tetap dari localStorage (chicken-and-egg) ──
       setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
       setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
       setSupabaseRef(localStorage.getItem('SUPABASE_REF') || 'vtwdgdbxgdmrravpdeix');
 
-      const savedProvider = localStorage.getItem('AI_PROVIDER') || 'anthropic';
+      // ── AI Config: 100% dari Supabase DB ──
+      const dbAiConfig = await sbGetSetting<{
+        provider: string; model: string; temperature: number; maxTokens: number;
+      }>('api_ai_config');
+      const savedProvider = dbAiConfig?.provider || 'anthropic';
       setActiveProvider(savedProvider);
 
-      // Load semua keys per provider
+      // Load semua API key per-provider dari DB
       const keys: Record<string, string> = {};
-      AI_PROVIDERS.forEach(p => {
-        keys[p.id] = localStorage.getItem(`AI_KEY_${p.id.toUpperCase()}`) || '';
-      });
-      // Backward compat: jika ada ANTHROPIC_API_KEY lama
-      if (!keys['anthropic']) keys['anthropic'] = localStorage.getItem('ANTHROPIC_API_KEY') || '';
+      await Promise.all(
+        AI_PROVIDERS.map(async p => {
+          const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
+          keys[p.id] = k || '';
+        })
+      );
       setProviderKeys(keys);
 
-      const dbAiConfig = await sbGetSetting<{ model: string; temperature: number; maxTokens: number }>('api_ai_config');
       if (dbAiConfig) {
         setAiModel(dbAiConfig.model || AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || 'claude-sonnet-4-6');
         setAiTemp(dbAiConfig.temperature ?? 0.3);
         setAiMaxTokens(dbAiConfig.maxTokens ?? 2048);
       } else {
-        setAiModel(localStorage.getItem('AI_MODEL') || AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || 'claude-sonnet-4-6');
-        setAiTemp(parseFloat(localStorage.getItem('AI_TEMPERATURE') || '0.3'));
-        setAiMaxTokens(parseInt(localStorage.getItem('AI_MAX_TOKENS') || '2048'));
+        setAiModel(AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || 'claude-sonnet-4-6');
+        setAiTemp(0.3);
+        setAiMaxTokens(2048);
       }
 
-      const dbSttConfig = await sbGetSetting<{ provider: string; lang: string }>('api_stt_config');
-      if (dbSttConfig) {
-        setSttProvider(dbSttConfig.provider || 'openai-whisper');
-        setSttLang(dbSttConfig.lang || 'id');
-      } else {
-        setSttProvider(localStorage.getItem('STT_PROVIDER') || 'openai-whisper');
-        setSttLang(localStorage.getItem('STT_LANG') || 'id');
-      }
-      setSttKey(localStorage.getItem('STT_API_KEY') || '');
+      // ── STT Config: 100% dari Supabase DB ──
+      const dbSttConfig = await sbGetSetting<{ provider: string; lang: string; sttKey: string }>('api_stt_config');
+      setSttProvider(dbSttConfig?.provider || 'openai-whisper');
+      setSttLang(dbSttConfig?.lang || 'id');
+      setSttKey(dbSttConfig?.sttKey || '');
+
+      // ── ElevenLabs: dari DB ──
       setElevenLabsKey((await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '');
       setElevenVoiceId((await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9');
       setElevenSpeed((await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0);
@@ -395,15 +437,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       alert(`${currentProviderDef.name} API Key wajib diisi.`);
       return;
     }
-    // Simpan key aktif ke localStorage per-provider
-    localStorage.setItem(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
-    // Backward compat untuk Anthropic
-    if (activeProvider === 'anthropic') localStorage.setItem('ANTHROPIC_API_KEY', key.trim());
-    localStorage.setItem('AI_PROVIDER', activeProvider);
-    localStorage.setItem('AI_MODEL', aiModel);
-    localStorage.setItem('AI_TEMPERATURE', aiTemp.toString());
-    localStorage.setItem('AI_MAX_TOKENS', aiMaxTokens.toString());
-
+    // Simpan API key provider ini ke DB (bukan localStorage)
+    await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
+    // Simpan konfigurasi AI aktif ke DB
     await sbSetSetting('api_ai_config', {
       provider: activeProvider,
       model: aiModel,
@@ -412,8 +448,10 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       keyConfigured: true,
       updatedAt: new Date().toISOString(),
     });
+    // Invalidasi cache in-memory agar callActiveAI baca ulang dari DB
+    clearAiConfigCache();
     addLocalLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
-    alert(`Konfigurasi ${currentProviderDef.name} berhasil disimpan sebagai AI Engine aktif!`);
+    alert(`Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
   };
 
   const handleTestAI = async (pid: string) => {
@@ -444,24 +482,24 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   };
 
   const handleSaveSTT = async () => {
-    localStorage.setItem('STT_API_KEY', sttKey.trim());
-    localStorage.setItem('STT_PROVIDER', sttProvider);
-    localStorage.setItem('STT_LANG', sttLang);
-    await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
-    await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
-    await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
+    // Simpan seluruh STT config ke DB (termasuk API key)
     await sbSetSetting('api_stt_config', {
       provider: sttProvider,
       lang: sttLang,
+      sttKey: sttKey.trim(),
       keyConfigured: !!sttKey.trim(),
       updatedAt: new Date().toISOString(),
     });
+    await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
+    await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
+    await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
     addLocalLog('success', 'SYSTEM', 'STT config updated.');
-    alert('Konfigurasi Speech-to-Text berhasil disimpan!');
+    alert('Konfigurasi Speech-to-Text berhasil disimpan ke database!');
   };
 
   const handleClearDbConfig = () => {
     if (confirm('Hapus seluruh konfigurasi Supabase?')) {
+      // Supabase credentials tetap di localStorage (bootstrap)
       localStorage.removeItem('SUPABASE_URL');
       localStorage.removeItem('SUPABASE_ANON_KEY');
       localStorage.removeItem('SUPABASE_REF');
