@@ -692,6 +692,13 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [phase,        setPhase]        = useState<OrbPhase>('idle');
   const [wakeFlash,    setWakeFlash]    = useState(false);
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
+  const [customLogoUrl, setCustomLogoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    sbGetSetting<{ logoUrl?: string }>('branding').then(b => {
+      if (b?.logoUrl) setCustomLogoUrl(b.logoUrl);
+    });
+  }, []);
 
   // phaseRef: selalu sinkron dengan state, dibaca dari closure tanpa stale
   const phaseRef = useRef<OrbPhase>('idle');
@@ -775,8 +782,12 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       {/* Wordmark */}
       <div className="absolute top-5 left-7 z-30 flex items-center gap-3">
-        <img src={CENNA_LOGO} alt="CENNA" className="w-10 h-10 object-contain"
-          style={{ filter: 'brightness(0) saturate(100%) invert(14%) sepia(27%) saturate(1200%) hue-rotate(196deg) brightness(95%) contrast(95%)' }} />
+        {customLogoUrl ? (
+          <img src={customLogoUrl} alt="Logo Klinik" className="h-10 w-auto object-contain max-w-[120px]" />
+        ) : (
+          <img src={CENNA_LOGO} alt="CENNA" className="w-10 h-10 object-contain"
+            style={{ filter: 'brightness(0) saturate(100%) invert(14%) sepia(27%) saturate(1200%) hue-rotate(196deg) brightness(95%) contrast(95%)' }} />
+        )}
         <div className="flex flex-col leading-tight">
           <span className="text-[13px] font-semibold tracking-[0.22em] uppercase" style={{ fontFamily: "'DM Sans', sans-serif", color: '#1e2a4a' }}>CENNA AI</span>
           <span className="text-[9px] tracking-[0.18em] uppercase text-[#b8a898]"  style={{ fontFamily: "'DM Sans', sans-serif" }}>Clinical Intelligence</span>

@@ -35,6 +35,9 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   const [brandTagline, setBrandTagline] = useState('Ambient Clinical Intelligence');
   const [colorPrimary, setColorPrimary] = useState('#1e2a4a');
   const [colorAccent, setColorAccent] = useState('#b8a898');
+  const [logoUrl, setLogoUrl] = useState<string>('');
+  const [logoUploading, setLogoUploading] = useState(false);
+  const logoInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     async function loadSettings() {
@@ -52,6 +55,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
         setBrandTagline(b.tagline);
         setColorPrimary(b.colorPrimary);
         setColorAccent(b.colorAccent);
+        if (b.logoUrl) setLogoUrl(b.logoUrl);
       }
       const session = sessionStorage.getItem('cenna_admin');
       if (session) {
@@ -100,10 +104,38 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       colorHex: colorPrimary,
       colorAccent,
       colorAccentHex: colorAccent,
+      logoUrl: logoUrl || undefined,
     };
     await sbSetSetting('branding', payloadHandler);
     await sbAddLog('success', 'SYSTEM', 'Platform customized visual variables saved.');
     alert('Aturan visual branding klinik di-lock!');
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 512 * 1024) {
+      alert('Ukuran logo maksimal 512 KB. Kompres gambar terlebih dahulu.');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      alert('Hanya file gambar (PNG, JPG, SVG, WebP) yang diizinkan.');
+      return;
+    }
+    setLogoUploading(true);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setLogoUrl(dataUrl);
+      setLogoUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = async () => {
+    if (confirm('Hapus logo kustom dan kembali ke logo default CENNA?')) {
+      setLogoUrl('');
+    }
   };
 
   const handleClearCache = () => {
@@ -314,6 +346,54 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
           <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-5 shadow-sm space-y-4">
             <h3 className="font-bold text-sm text-[#1e2a4a]">🎨 Branding & Visual</h3>
             <div className="space-y-2">
+
+              {/* Logo Upload */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Logo Klinik</label>
+                <div className="border-2 border-dashed border-[#1e2a4a]/20 rounded-xl p-3 flex flex-col items-center gap-2 bg-slate-50/50">
+                  {logoUrl ? (
+                    <div className="flex flex-col items-center gap-2 w-full">
+                      <img src={logoUrl} alt="Logo preview" className="h-12 w-auto object-contain max-w-[160px]" />
+                      <div className="flex gap-2 w-full">
+                        <button
+                          onClick={() => logoInputRef.current?.click()}
+                          className="flex-1 py-1.5 text-[10px] font-bold text-[#1e2a4a] border border-[#1e2a4a]/20 rounded-lg bg-white hover:bg-slate-50 cursor-pointer"
+                        >
+                          Ganti Logo
+                        </button>
+                        <button
+                          onClick={handleRemoveLogo}
+                          className="py-1.5 px-3 text-[10px] font-bold text-red-500 border border-red-200 rounded-lg bg-white hover:bg-red-50 cursor-pointer"
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={logoUploading}
+                      className="flex flex-col items-center gap-1.5 py-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <span className="text-2xl">🖼️</span>
+                      <span className="text-[10px] text-[#1e2a4a]/50 font-medium">
+                        {logoUploading ? 'Memproses…' : 'Klik untuk upload logo'}
+                      </span>
+                      <span className="text-[9px] text-[#1e2a4a]/30">PNG, JPG, SVG, WebP · maks 512 KB</span>
+                    </button>
+                  )}
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                    className="hidden"
+                    onChange={handleLogoUpload}
+                  />
+                </div>
+                {logoUrl && (
+                  <p className="text-[9px] text-emerald-600 font-semibold">✓ Logo akan tampil di halaman depan. Klik "Lock Visual Branding" untuk menyimpan.</p>
+                )}
+              </div>
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                   Tagline Klinik Platform
