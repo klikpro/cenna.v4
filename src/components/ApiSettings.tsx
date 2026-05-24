@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { getSupabaseClient, addLocalLog } from '../lib/supabase';
+import { getSupabaseClient, addLocalLog, sbSetSetting, sbGetSetting } from '../lib/supabase';
 
 interface ApiSettingsProps {
   onSettingsSaved: () => void;
@@ -33,16 +33,39 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [sttLang, setSttLang] = useState('id');
 
   useEffect(() => {
-    setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
-    setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
-    setSupabaseRef(localStorage.getItem('SUPABASE_REF') || 'vtwdgdbxgdmrravpdeix');
-    setAnthropicKey(localStorage.getItem('ANTHROPIC_API_KEY') || '');
-    setAiModel(localStorage.getItem('AI_MODEL') || 'claude-sonnet-4-6');
-    setAiTemp(parseFloat(localStorage.getItem('AI_TEMPERATURE') || '0.3'));
-    setAiMaxTokens(parseInt(localStorage.getItem('AI_MAX_TOKENS') || '2048'));
-    setSttKey(localStorage.getItem('STT_API_KEY') || '');
-    setSttProvider(localStorage.getItem('STT_PROVIDER') || 'openai-whisper');
-    setSttLang(localStorage.getItem('STT_LANG') || 'id');
+    async function loadSettings() {
+      // Supabase credentials — hanya dari localStorage (bootstrap problem)
+      setSupabaseUrl(localStorage.getItem('SUPABASE_URL') || 'https://vtwdgdbxgdmrravpdeix.supabase.co');
+      setSupabaseAnonKey(localStorage.getItem('SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0d2RnZGJ4Z2RtcnJhdnBkZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQ1NjYsImV4cCI6MjA5NTExMDU2Nn0._nJBT6q1wCkvjcYjsRYN8bKDMeeqOfV1WlQxQYT0DJk');
+      setSupabaseRef(localStorage.getItem('SUPABASE_REF') || 'vtwdgdbxgdmrravpdeix');
+
+      // AI config — prioritaskan Supabase, fallback ke localStorage
+      const dbAiConfig = await sbGetSetting<{ model: string; temperature: number; maxTokens: number }>('api_ai_config');
+      if (dbAiConfig) {
+        setAiModel(dbAiConfig.model || 'claude-sonnet-4-6');
+        setAiTemp(dbAiConfig.temperature ?? 0.3);
+        setAiMaxTokens(dbAiConfig.maxTokens ?? 2048);
+      } else {
+        setAiModel(localStorage.getItem('AI_MODEL') || 'claude-sonnet-4-6');
+        setAiTemp(parseFloat(localStorage.getItem('AI_TEMPERATURE') || '0.3'));
+        setAiMaxTokens(parseInt(localStorage.getItem('AI_MAX_TOKENS') || '2048'));
+      }
+
+      // STT config — prioritaskan Supabase, fallback ke localStorage
+      const dbSttConfig = await sbGetSetting<{ provider: string; lang: string }>('api_stt_config');
+      if (dbSttConfig) {
+        setSttProvider(dbSttConfig.provider || 'openai-whisper');
+        setSttLang(dbSttConfig.lang || 'id');
+      } else {
+        setSttProvider(localStorage.getItem('STT_PROVIDER') || 'openai-whisper');
+        setSttLang(localStorage.getItem('STT_LANG') || 'id');
+      }
+
+      // API keys — hanya dari localStorage (tidak simpan raw key ke DB)
+      setAnthropicKey(localStorage.getItem('ANTHROPIC_API_KEY') || '');
+      setSttKey(localStorage.getItem('STT_API_KEY') || '');
+    }
+    loadSettings();
   }, []);
 
   const handleSaveSupabase = () => {
@@ -86,24 +109,41 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     }
   };
 
-  const handleSaveAI = () => {
+  const handleSaveAI = async () => {
     if (!anthropicKey.trim()) {
       alert('Anthropic Claude API Key wajib diisi.');
       return;
     }
+    // Raw API key: simpan HANYA di localStorage (tidak masuk DB demi keamanan)
     localStorage.setItem('ANTHROPIC_API_KEY', anthropicKey.trim());
     localStorage.setItem('AI_MODEL', aiModel);
     localStorage.setItem('AI_TEMPERATURE', aiTemp.toString());
     localStorage.setItem('AI_MAX_TOKENS', aiMaxTokens.toString());
+    // Konfigurasi non-sensitif (model, temp, tokens) → simpan ke Supabase
+    await sbSetSetting('api_ai_config', {
+      model: aiModel,
+      temperature: aiTemp,
+      maxTokens: aiMaxTokens,
+      keyConfigured: true, // flag bahwa key sudah di-set (tanpa expose nilainya)
+      updatedAt: new Date().toISOString(),
+    });
     setAiStatus('connected');
     addLocalLog('success', 'SYSTEM', 'Anthropic Claude AI API Key updated.');
     alert('Aturan Credentials AI Engine Claude berhasil disimpan!');
   };
 
-  const handleSaveSTT = () => {
+  const handleSaveSTT = async () => {
+    // Raw STT key: simpan HANYA di localStorage (tidak masuk DB demi keamanan)
     localStorage.setItem('STT_API_KEY', sttKey.trim());
     localStorage.setItem('STT_PROVIDER', sttProvider);
     localStorage.setItem('STT_LANG', sttLang);
+    // Konfigurasi non-sensitif → simpan ke Supabase
+    await sbSetSetting('api_stt_config', {
+      provider: sttProvider,
+      lang: sttLang,
+      keyConfigured: !!sttKey.trim(),
+      updatedAt: new Date().toISOString(),
+    });
     addLocalLog('success', 'SYSTEM', 'OpenAI Whisper key updated.');
     alert('Konfigurasi Speech-to-Text berhasil disimpan!');
   };

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
-import { addLocalLog } from '../lib/supabase';
+import { addLocalLog, sbGetSetting, sbSetSetting } from '../lib/supabase';
 
 // Pre-seeded sandbox scenarios
 const SCENARIOS = {
@@ -59,44 +59,61 @@ export default function AiConfig() {
   const [sandboxOutput, setSandboxOutput] = useState('');
   const [sandboxLoading, setSandboxLoading] = useState(false);
 
-  // Load saved local setting on mount
+  const DEFAULT_PROMPT_CORE = `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu {{doctor_name}} ({{specialization}}) di {{clinic_name}}.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`;
+  const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`;
+  const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
+  const DEFAULT_PROMPT_MEDICATION = `Evaluasi keamanan regimen obat berikut untuk pasien {{patient_name}} ({{patient_age}} tahun):\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`;
+
+  // Load saved settings — prioritaskan Supabase, fallback ke localStorage
   useEffect(() => {
-    // Demografi prompts
-    setPromptCore(localStorage.getItem('PROMPT_CORE') || `Kamu adalah CENNA AI, asisten klinis medis berbasis AI yang dirancang untuk membantu {{doctor_name}} ({{specialization}}) di {{clinic_name}}.\n\nCara berpikirmu:\n1. Analisis seperti KONSULTAN SPESIALIS — sistematis, komprehensif, evidence-based\n2. Selalu pertimbangkan differential diagnosis secara terstruktur\n3. Identifikasi RED FLAG secara proaktif — keselamatan pasien adalah prioritas utama\n4. Gunakan terminologi medis Indonesia yang baku, sesuai standar IDI/PAPDI\n5. Sertakan probabilitas klinis dalam setiap diagnosis banding\n6. Berikan rekomendasi berdasarkan guidelines terkini (PAPDI, Kemenkes, WHO)`);
-    setPromptSoap(localStorage.getItem('PROMPT_SOAP') || `Analisis transcript percakapan berikut dan generate SOAP Note yang komprehensif:\n\nTRANSCRIPT: {{transcript}}\n\nRiwayat pasien sebelumnya: {{soap_history}}\n\nInstruksi:\n- Ekstrak SEMUA informasi klinis dari transcript\n- Identifikasi gejala yang disebutkan maupun yang tersirat\n- Susun Assessment dengan diferensial diagnosis terstruktur + probabilitas\n- Plan harus spesifik: nama obat, dosis, frekuensi, durasi\n- Format output dalam JSON yang valid`);
-    setPromptRedflag(localStorage.getItem('PROMPT_REDFLAG') || `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`);
-    setPromptMedication(localStorage.getItem('PROMPT_MEDICATION') || `Evaluasi keamanan regimen obat berikut untuk pasien {{patient_name}} ({{patient_age}} tahun):\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`);
+    async function loadSettings() {
+      // --- Prompts: coba dari Supabase dulu ---
+      const dbCore = await sbGetSetting<string>('prompt_core');
+      setPromptCore(dbCore || localStorage.getItem('PROMPT_CORE') || DEFAULT_PROMPT_CORE);
 
-    // Load behavior
-    const savedBehavior = localStorage.getItem('AI_BEHAVIOR');
-    if (savedBehavior) {
-      try {
-        const parsed: AIBehaviorSettings = JSON.parse(savedBehavior);
-        setProfile(parsed.profile);
-        setDdxActive(parsed.ddx);
-        setEbmActive(parsed.ebm);
-        setUncertainActive(parsed.uncertain);
-        setFollowupActive(parsed.followup);
-        setEduActive(parsed.edu);
-        setSoapDetail(parsed.soapDetail);
-        setDdxCount(parsed.ddxCount);
-        setAiLang(parsed.lang);
-      } catch (e) {}
-    }
+      const dbSoap = await sbGetSetting<string>('prompt_soap');
+      setPromptSoap(dbSoap || localStorage.getItem('PROMPT_SOAP') || DEFAULT_PROMPT_SOAP);
 
-    // Load reasoning
-    const savedReasoning = localStorage.getItem('REASONING_CONFIG');
-    if (savedReasoning) {
-      try {
-        const parsed: ReasoningConfig = JSON.parse(savedReasoning);
-        setFramework(parsed.framework);
-        setEvidenceLevel(parsed.evidenceLevel);
-        setClinicalRules(parsed.rules);
-      } catch (e) {}
+      const dbRedflag = await sbGetSetting<string>('prompt_redflag');
+      setPromptRedflag(dbRedflag || localStorage.getItem('PROMPT_REDFLAG') || DEFAULT_PROMPT_REDFLAG);
+
+      const dbMedication = await sbGetSetting<string>('prompt_medication');
+      setPromptMedication(dbMedication || localStorage.getItem('PROMPT_MEDICATION') || DEFAULT_PROMPT_MEDICATION);
+
+      // --- Behavior ---
+      const dbBehavior = await sbGetSetting<AIBehaviorSettings>('ai_behavior');
+      const behaviorSource = dbBehavior || (() => {
+        const stored = localStorage.getItem('AI_BEHAVIOR');
+        try { return stored ? JSON.parse(stored) : null; } catch { return null; }
+      })();
+      if (behaviorSource) {
+        setProfile(behaviorSource.profile);
+        setDdxActive(behaviorSource.ddx);
+        setEbmActive(behaviorSource.ebm);
+        setUncertainActive(behaviorSource.uncertain);
+        setFollowupActive(behaviorSource.followup);
+        setEduActive(behaviorSource.edu);
+        setSoapDetail(behaviorSource.soapDetail);
+        setDdxCount(behaviorSource.ddxCount);
+        setAiLang(behaviorSource.lang);
+      }
+
+      // --- Reasoning ---
+      const dbReasoning = await sbGetSetting<ReasoningConfig>('reasoning_config');
+      const reasoningSource = dbReasoning || (() => {
+        const stored = localStorage.getItem('REASONING_CONFIG');
+        try { return stored ? JSON.parse(stored) : null; } catch { return null; }
+      })();
+      if (reasoningSource) {
+        setFramework(reasoningSource.framework);
+        setEvidenceLevel(reasoningSource.evidenceLevel);
+        setClinicalRules(reasoningSource.rules);
+      }
     }
+    loadSettings();
   }, []);
 
-  const handleSaveBehavior = () => {
+  const handleSaveBehavior = async () => {
     const payload: AIBehaviorSettings = {
       profile,
       ddx: ddxActive,
@@ -108,27 +125,35 @@ export default function AiConfig() {
       ddxCount,
       lang: aiLang,
     };
-    localStorage.setItem('AI_BEHAVIOR', JSON.stringify(payload));
+    localStorage.setItem('AI_BEHAVIOR', JSON.stringify(payload)); // fallback offline
+    await sbSetSetting('ai_behavior', payload);
     addLocalLog('success', 'SYSTEM', 'Mengubah konfigurasi perilaku klinis AI.');
     alert('Konfigurasi perilaku klinis berhasil disimpan!');
   };
 
-  const handleSavePrompts = () => {
-    localStorage.setItem('PROMPT_CORE', promptCore);
+  const handleSavePrompts = async () => {
+    localStorage.setItem('PROMPT_CORE', promptCore); // fallback offline
     localStorage.setItem('PROMPT_SOAP', promptSoap);
     localStorage.setItem('PROMPT_REDFLAG', promptRedflag);
     localStorage.setItem('PROMPT_MEDICATION', promptMedication);
+    await Promise.all([
+      sbSetSetting('prompt_core', promptCore),
+      sbSetSetting('prompt_soap', promptSoap),
+      sbSetSetting('prompt_redflag', promptRedflag),
+      sbSetSetting('prompt_medication', promptMedication),
+    ]);
     addLocalLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
     alert('Seluruh kustomisasi prompt berhasil diperbarui!');
   };
 
-  const handleSaveReasoning = () => {
+  const handleSaveReasoning = async () => {
     const payload: ReasoningConfig = {
       framework,
       evidenceLevel,
       rules: clinicalRules,
     };
-    localStorage.setItem('REASONING_CONFIG', JSON.stringify(payload));
+    localStorage.setItem('REASONING_CONFIG', JSON.stringify(payload)); // fallback offline
+    await sbSetSetting('reasoning_config', payload);
     addLocalLog('success', 'SYSTEM', 'Mengubah logika reasoning klinis AI.');
     alert('Aturan reasoning engine berhasil diperbarui!');
   };

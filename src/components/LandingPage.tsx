@@ -67,15 +67,15 @@ function useWakeWord(onDetected: () => void, enabled: boolean) {
     rec.onresult = (evt: SpeechRecognitionEvent) => {
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
         const r = evt.results[i];
+        const alts = Array.from({ length: r.length }, (_, j) => r[j].transcript);
+        // diagnostic logging — tampilkan teks aktual
+        console.log('[Hai Cenna debug]', { final: r.isFinal, alts });
         for (let j = 0; j < r.length; j++) {
           if (matchesWakeWord(r[j].transcript)) {
             onDetectedRef.current();
             return;
           }
         }
-        // diagnostic logging
-        const alts = Array.from({ length: r.length }, (_, j) => r[j].transcript);
-        console.log('[Hai Cenna debug]', { final: r.isFinal, alts });
       }
     };
 
