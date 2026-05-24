@@ -267,8 +267,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         <img src={CENNA_LOGO} alt="CENNA" className="w-10 h-10 object-contain"
           style={{ filter: 'brightness(0) saturate(100%) invert(14%) sepia(27%) saturate(1200%) hue-rotate(196deg) brightness(95%) contrast(95%)' }} />
         <div className="flex flex-col leading-tight">
-          <span className="text-[13px] font-semibold tracking-[0.22em] uppercase text-[#1e2a4a]"
-            style={{ fontFamily: "'DM Sans', sans-serif" }}></span>
+          <span className="text-[13px] font-semibold tracking-[0.22em] uppercase"
+            style={{ fontFamily: "'DM Sans', sans-serif", color: '#1e2a4a' }}>CENNA AI</span>
           <span className="text-[9px] tracking-[0.18em] uppercase text-[#b8a898]"
             style={{ fontFamily: "'DM Sans', sans-serif" }}>Clinical Intelligence</span>
         </div>
