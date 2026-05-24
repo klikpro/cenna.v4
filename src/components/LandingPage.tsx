@@ -135,7 +135,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     setTimeout(() => setWakeFlash(false), 900);
     setOrbState((prev) => (prev === 'idle' ? 'listening' : prev));
     setLastHeard(new Date().toLocaleTimeString());
-  }, []);
+    // Navigasi ke login saat wake word terdeteksi
+    onLoginClick();
+  }, [onLoginClick]);
 
   useWakeWord(handleWakeWord, wakeEnabled);
 
