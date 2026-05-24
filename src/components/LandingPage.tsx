@@ -815,9 +815,21 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     sbGetSetting<{ logoUrl?: string }>('branding').then(b => {
       if (b?.logoUrl) setCustomLogoUrl(b.logoUrl);
     });
-    // Cek apakah AI key sudah dikonfigurasi
-    sbGetSetting<{ provider: string; keyConfigured?: boolean }>('api_ai_config').then(cfg => {
-      if (cfg?.keyConfigured) setAiEnabled(true);
+    // Cek apakah AI key sudah dikonfigurasi:
+    // Dua jalur: (1) flag keyConfigured ada → langsung aktif
+    // (2) flag tidak ada (data lama) → cek API key aktual per-provider
+    sbGetSetting<{ provider: string; keyConfigured?: boolean }>('api_ai_config').then(async cfg => {
+      if (!cfg) return;
+      if (cfg.keyConfigured) {
+        setAiEnabled(true);
+        return;
+      }
+      // Fallback: cek apakah API key provider aktif benar-benar tersimpan
+      const providerId = cfg.provider || 'anthropic';
+      const key = await sbGetSetting<string>(`AI_KEY_${providerId.toUpperCase()}`);
+      if (key && key.trim().length > 0) {
+        setAiEnabled(true);
+      }
     });
   }, []);
 
