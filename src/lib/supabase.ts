@@ -224,13 +224,24 @@ export async function sbGetSession() {
 
 export async function sbGetSetting<T>(key: string): Promise<T | null> {
   const client = getSupabaseClient();
-  if (!client) return null;
+  if (!client) {
+    console.warn(`[sbGetSetting] No Supabase client — key: ${key}`);
+    return null;
+  }
   const { data, error } = await client
     .from('app_settings')
     .select('value')
     .eq('key', key)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) {
+    console.error(`[sbGetSetting] Error reading key "${key}":`, error.message, error.code);
+    return null;
+  }
+  if (!data) {
+    console.info(`[sbGetSetting] Key not found: "${key}"`);
+    return null;
+  }
+  console.debug(`[sbGetSetting] OK key "${key}":`, typeof data.value, String(data.value).slice(0, 30));
   return data.value as T;
 }
 
