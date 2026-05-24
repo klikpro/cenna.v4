@@ -7,7 +7,7 @@ export interface AuditLogEntry {
   id: string;
   ts: string;
   level: 'info' | 'success' | 'warning' | 'error' | 'critical';
-  category: 'AUTH' | 'AI' | 'SOAP' | 'SYSTEM' | 'INTEGRATION';
+  category: 'AUTH' | 'AI' | 'SOAP' | 'SYSTEM' | 'INTEGRATION' | 'TEMPLATE';
   message: string;
   user: string;
   ip: string;
@@ -72,23 +72,52 @@ export interface ReasoningConfig {
   rules: string;
 }
 
+// ─── Conversation Template Types ──────────────────────────────────────────────
+
+/** Satu langkah dalam conversation template */
+export interface ConversationStep {
+  id: string;
+  order: number;               // urutan (1, 2, 3, ...)
+  label: string;               // label untuk tampilan admin
+  response_text: string;       // teks yang diucapkan CENNA
+  next_question: string;       // pertanyaan lanjutan (kosong = tidak ada)
+  orb_primary: string;         // hex warna orb primer, e.g. "#1e2a4a"
+  orb_secondary: string;       // hex warna orb sekunder, e.g. "#b8a898"
+  bg_from: string;             // hex gradient bg awal, e.g. "#f8f5f0"
+  bg_to: string;               // hex gradient bg akhir, e.g. "#ffffff"
+}
+
+/** Template percakapan terskript */
+export interface ConversationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;          // hanya 1 template aktif sekaligus
+  greeting: string;            // sapaan awal saat wake word (ganti "Halo dokter...")
+  steps: ConversationStep[];
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Clinical Session Types ────────────────────────────────────────────────────
+
 /** Hasil anamnesis terstruktur PQRST yang digali CENNA dari percakapan */
 export interface AnamnesisData {
   // PQRST
-  provokasi: string;        // Faktor yang memperberat / meringankan keluhan
-  kualitas: string;         // Sifat / karakter keluhan (nyeri tumpul, tajam, dll)
-  radiasi: string;          // Penyebaran / lokasi keluhan
-  skala: string;            // Skala intensitas (0-10 atau deskriptif)
-  waktu: string;            // Onset, durasi, frekuensi, pola
+  provokasi: string;
+  kualitas: string;
+  radiasi: string;
+  skala: string;
+  waktu: string;
   // Riwayat
-  rpd: string;              // Riwayat Penyakit Dahulu
-  rpk: string;              // Riwayat Penyakit Keluarga
-  rps: string;              // Riwayat Pribadi & Sosial (rokok, alkohol, pekerjaan, dll)
+  rpd: string;
+  rpk: string;
+  rps: string;
   // Pemeriksaan
-  pemfis: string;           // Hasil Pemeriksaan Fisik (jika tersedia)
+  pemfis: string;
   // Status pengisian
   phase: 'gathering' | 'complete';
-  missing_fields: string[]; // Field yang belum tergali
+  missing_fields: string[];
 }
 
 /** Sesi anamnesis lengkap yang disimpan ke database */

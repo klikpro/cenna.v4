@@ -15,10 +15,10 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { sbGetSetting, sbSetSetting, sbSaveSession, DEFAULT_PROMPT_ANAMNESIS } from '../lib/supabase';
+import { sbGetSetting, sbSetSetting, sbSaveSession, DEFAULT_PROMPT_ANAMNESIS, sbGetActiveTemplate } from '../lib/supabase';
 import { callActiveAI } from './ApiSettings';
 import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './tts-constants';
-import type { AnamnesisData, ClinicalConclusion } from '../types';
+import type { AnamnesisData, ClinicalConclusion, ConversationTemplate } from '../types';
 
 // Re-export agar komponen lain yang sudah import dari LandingPage tidak perlu diubah
 export { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './tts-constants';
@@ -133,6 +133,12 @@ function matchesClosingWord(raw: string): boolean {
 let _cachedAnamnesisPrompt: string | null = null;
 let _cachedAiBehavior: { ddxCount: number; profile: string; ddx: boolean; ebm: boolean } | null = null;
 
+// ─── Template mode state ───────────────────────────────────
+// Direset tiap sesi baru (resetAnamnesisState)
+let _activeTemplate: ConversationTemplate | null = null;
+let _templateStepIndex: number = 0;   // indeks step saat ini
+let _templateDone: boolean = false;    // true = semua step habis, fallback ke AI
+
 /** Baca prompt anamnesis dari DB; fallback ke DEFAULT_PROMPT_ANAMNESIS dari supabase.ts */
 async function getAnamnesisPrompt(): Promise<string> {
   if (_cachedAnamnesisPrompt) return _cachedAnamnesisPrompt;
@@ -183,6 +189,10 @@ function resetAnamnesisState() {
   // Invalidasi cache agar sesi berikutnya membaca prompt & behavior terbaru dari DB
   _cachedAnamnesisPrompt = null;
   _cachedAiBehavior = null;
+  // Reset template state
+  _activeTemplate = null;
+  _templateStepIndex = 0;
+  _templateDone = false;
 }
 
 async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
@@ -814,21 +824,32 @@ function useOrbCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>, phas
 
 // ─── OrbCore ─────────────────────────────────────────────────────────────────
 
-interface OrbCoreProps { phase: OrbPhase; wakeEnabled: boolean; wakeFlash: boolean; }
+interface OrbCoreProps {
+  phase: OrbPhase;
+  wakeEnabled: boolean;
+  wakeFlash: boolean;
+  templateColors?: { primary: string; secondary: string } | null;
+}
 
-function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
-  const glowColor = {
-    idle: '#1e2a4a', speaking: '#b8a898', listening: '#1e2a4a',
-    processing: '#7F77DD', responding: '#b8a898', popup: '#b8a898'
-  }[phase];
-  const orbRing = {
-    idle: 'ring-[3px] ring-[#1e2a4a]/20',
-    speaking: 'ring-[5px] ring-[#b8a898]/60',
-    listening: 'ring-[5px] ring-[#1e2a4a]/40',
-    processing: 'ring-[6px] ring-[#7F77DD]/70',
-    responding: 'ring-[5px] ring-[#b8a898]/60',
-    popup: 'ring-[3px] ring-[#b8a898]/30',
-  }[phase];
+function OrbCore({ phase, wakeEnabled, wakeFlash, templateColors }: OrbCoreProps) {
+  // Jika template mode aktif, gunakan warna template; jika tidak, gunakan palet default
+  const orbPrimary   = templateColors?.primary   ?? '#1e2a4a';
+  const orbSecondary = templateColors?.secondary  ?? '#b8a898';
+
+  const glowColor = templateColors
+    ? orbPrimary
+    : { idle: '#1e2a4a', speaking: '#b8a898', listening: '#1e2a4a', processing: '#7F77DD', responding: '#b8a898', popup: '#b8a898' }[phase];
+
+  const orbRing = templateColors
+    ? `ring-[5px] ring-[${orbPrimary}]/50`
+    : {
+        idle: 'ring-[3px] ring-[#1e2a4a]/20',
+        speaking: 'ring-[5px] ring-[#b8a898]/60',
+        listening: 'ring-[5px] ring-[#1e2a4a]/40',
+        processing: 'ring-[6px] ring-[#7F77DD]/70',
+        responding: 'ring-[5px] ring-[#b8a898]/60',
+        popup: 'ring-[3px] ring-[#b8a898]/30',
+      }[phase];
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: 340, height: 340 }}>
@@ -845,9 +866,21 @@ function OrbCore({ phase, wakeEnabled, wakeFlash }: OrbCoreProps) {
           style={{ width: 290, height: 290, border: '1.5px solid rgba(127,119,221,0.45)', animation: 'listeningPulse 1.8s ease-in-out infinite' }} />
       )}
       <div className="absolute rounded-full transition-all duration-700 ease-out"
-        style={{ width: 260, height: 260, background: `radial-gradient(circle, ${glowColor}22 0%, transparent 75%)`, filter: 'blur(32px)', transform: `scale(${phase === 'listening' ? 1.12 : 1})` }} />
-      <div className={`relative rounded-full flex items-center justify-center border-none transition-all duration-700 ease-out ${orbRing}`}
-        style={{ width: 200, height: 200, background: 'conic-gradient(from 0deg, #1e2a4a 0%, #b8a898 35%, #f5f0e8 55%, #b8a898 75%, #1e2a4a 100%)', boxShadow: `0 28px 60px -12px ${glowColor}40, 0 0 0 1px rgba(255,255,255,0.15) inset`, animation: 'orbSpin 14s linear infinite' }}>
+        style={{
+          width: 260, height: 260,
+          background: `radial-gradient(circle, ${glowColor}22 0%, transparent 75%)`,
+          filter: 'blur(32px)',
+          transform: `scale(${phase === 'listening' ? 1.12 : 1})`
+        }} />
+      <div className={`relative rounded-full flex items-center justify-center border-none transition-all duration-1000 ease-out ${orbRing}`}
+        style={{
+          width: 200, height: 200,
+          background: templateColors
+            ? `conic-gradient(from 0deg, ${orbPrimary} 0%, ${orbSecondary} 35%, #f5f0e8 55%, ${orbSecondary} 75%, ${orbPrimary} 100%)`
+            : 'conic-gradient(from 0deg, #1e2a4a 0%, #b8a898 35%, #f5f0e8 55%, #b8a898 75%, #1e2a4a 100%)',
+          boxShadow: `0 28px 60px -12px ${glowColor}40, 0 0 0 1px rgba(255,255,255,0.15) inset`,
+          animation: 'orbSpin 14s linear infinite'
+        }}>
         <div className="absolute rounded-full"
           style={{ inset: 6, background: 'radial-gradient(ellipse at 35% 30%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.08) 60%, transparent 100%)' }} />
         <div className="relative flex flex-col items-center justify-center z-10">
@@ -1145,6 +1178,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [customLogoUrl, setCustomLogoUrl] = useState<string | null>(null);
   const [aiLabel,      setAiLabel]      = useState('Cenna sedang berpikir…');
   const [aiEnabled,    setAiEnabled]    = useState(false);
+  // Template mode: warna orb per step
+  const [templateOrbColors, setTemplateOrbColors] = useState<{ primary: string; secondary: string } | null>(null);
+  const [templateModeName,  setTemplateModeName]  = useState<string | null>(null);
   const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
   const sessionDataRef = useRef<CapturedData[]>([]);
   function mergeSessionData(all: CapturedData[]): CapturedData {
@@ -1206,10 +1242,11 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     console.log('[Cenna] wake word! → speaking');
 
     // BUG-02 FIX: Reset state anamnesis module-level di awal setiap sesi baru
-    // agar data pasien sebelumnya tidak bocor ke sesi berikutnya
     resetAnamnesisState();
     conversationHistoryRef.current = [];
     sessionDataRef.current = [];
+    setTemplateOrbColors(null);
+    setTemplateModeName(null);
 
     setWakeFlash(true);
     setTimeout(() => setWakeFlash(false), 900);
@@ -1220,8 +1257,26 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       setPhase('listening');
     };
 
-    // speak() — otomatis pilih provider dari settings
-    speak('Halo dokter, ada yang bisa Cenna bantu?', goListening);
+    // Cek apakah ada template aktif, gunakan greeting-nya
+    sbGetActiveTemplate().then(tpl => {
+      if (tpl && tpl.steps.length > 0) {
+        _activeTemplate    = tpl;
+        _templateStepIndex = 0;
+        _templateDone      = false;
+        setTemplateModeName(tpl.name);
+        const greeting = tpl.greeting || 'Halo dokter, ada yang bisa Cenna bantu?';
+        // Set warna orb step pertama saat sapaan
+        const step0 = tpl.steps[0];
+        if (step0) setTemplateOrbColors({ primary: step0.orb_primary, secondary: step0.orb_secondary });
+        console.log('[Cenna] Template mode aktif:', tpl.name);
+        speak(greeting, goListening);
+      } else {
+        // Normal AI mode
+        speak('Halo dokter, ada yang bisa Cenna bantu?', goListening);
+      }
+    }).catch(() => {
+      speak('Halo dokter, ada yang bisa Cenna bantu?', goListening);
+    });
   }, []);
 
   // Reset firedRef ketika phase kembali ke idle (setelah popup/close)
@@ -1239,10 +1294,59 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   useWakeWord(handleWakeWord, phase === 'idle');
 
   const handleAmbientData = useCallback(async (data: CapturedData) => {
+
+    // ─── TEMPLATE MODE ─────────────────────────────────────────────
+    if (_activeTemplate && !_templateDone) {
+      const steps = _activeTemplate.steps;
+      const step  = steps[_templateStepIndex];
+
+      if (!step) {
+        // Semua step habis → fallback ke AI
+        _templateDone = true;
+        setTemplateOrbColors(null);
+        setTemplateModeName(null);
+        console.log('[Cenna] Template selesai → fallback ke AI mode');
+        // Jatuhkan ke blok AI di bawah (tidak return)
+      } else {
+        // Update orb colors sesuai step saat ini
+        setTemplateOrbColors({ primary: step.orb_primary, secondary: step.orb_secondary });
+
+        // Gabungkan response + pertanyaan lanjutan
+        const fullResponse = step.next_question
+          ? `${step.response_text} ${step.next_question}`
+          : step.response_text;
+
+        _templateStepIndex++;
+
+        // Siapkan step berikutnya (prefetch color) jika ada
+        const nextStep = steps[_templateStepIndex];
+
+        setPhase('responding');
+        speak(fullResponse, () => {
+          if (nextStep) {
+            // Ada step berikutnya → kembali listening
+            setTemplateOrbColors({ primary: nextStep.orb_primary, secondary: nextStep.orb_secondary });
+            setPhase('listening');
+          } else {
+            // Ini step terakhir → fallback ke AI setelah ini
+            _templateDone = true;
+            setTemplateOrbColors(null);
+            setTemplateModeName(null);
+            setPhase('listening');
+          }
+        });
+
+        // Simpan data percakapan
+        sessionDataRef.current.push(data);
+        return; // JANGAN lanjut ke blok AI
+      }
+    }
+
+    // ─── AI MODE (normal atau setelah template habis) ────────────────
     if (!aiEnabled) {
-      // Mode dasar tanpa AI: langsung kembali listening, simpan data diam-diam
+      // Mode dasar tanpa AI: langsung kembali listening
       setCapturedData(data);
-      setPhase('listening'); // handsfree — tidak popup
+      setPhase('listening');
       return;
     }
 
@@ -1264,21 +1368,17 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         pertanyaan: aiResult.pertanyaan.length ? aiResult.pertanyaan : data.pertanyaan,
       };
 
-      // Akumulasi semua data sesi ke dalam sessionDataRef
       sessionDataRef.current.push(enrichedData);
-
       setPhase('responding');
 
       const isSessionEnd = aiResult.session_end || aiResult.conclusion !== null;
 
       if (isSessionEnd) {
-        // Kesimpulan klinis tersedia — simpan ke DB lalu tampilkan ConclusionPopup
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
         const allTranscripts = sessionDataRef.current.map(d => d.transcript).join(' — ');
         const allKeluhan = Array.from(new Set(sessionDataRef.current.flatMap(d => d.keluhan)));
         const allObat = Array.from(new Set(sessionDataRef.current.flatMap(d => d.obat)));
 
-        // Simpan sesi ke Supabase (non-blocking)
         sbSaveSession({
           id: sessionId,
           created_at: new Date().toISOString(),
@@ -1303,16 +1403,12 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
           }
         });
       } else {
-        // Normal — ucapkan, langsung balik listening (handsfree)
-        speak(aiResult.voice_response, () => {
-          setPhase('listening');
-        });
+        speak(aiResult.voice_response, () => setPhase('listening'));
       }
 
     } catch (err) {
       console.warn('[Cenna AI] gagal:', err);
       currentHistory.pop();
-      // Pada error, tetap kembali ke listening — jangan popup
       setPhase('listening');
     }
   }, [aiEnabled]);
@@ -1386,8 +1482,44 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         Admin →
       </button>
 
+      {/* Template mode badge */}
+      {templateModeName && (
+        <div
+          className="absolute top-5 left-1/2 z-30"
+          style={{ transform: 'translateX(-50%)' }}
+        >
+          <div
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full border"
+            style={{
+              background: templateOrbColors ? `${templateOrbColors.primary}15` : 'rgba(30,42,74,0.08)',
+              borderColor: templateOrbColors ? `${templateOrbColors.primary}30` : 'rgba(30,42,74,0.12)',
+              fontFamily: "'DM Mono', monospace",
+            }}
+          >
+            <span style={{ fontSize: 8 }}>📋</span>
+            <span
+              className="text-[9px] font-bold tracking-widest uppercase"
+              style={{ color: templateOrbColors?.primary ?? '#1e2a4a' }}
+            >
+              Template: {templateModeName}
+            </span>
+            <span
+              className="text-[8px] tracking-wider"
+              style={{ color: templateOrbColors?.primary ?? '#1e2a4a', opacity: 0.5 }}
+            >
+              · step {_templateStepIndex}/{_activeTemplate?.steps.length ?? 0}
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
-        <OrbCore phase={phase} wakeEnabled={phase === 'idle'} wakeFlash={wakeFlash} />
+        <OrbCore
+          phase={phase}
+          wakeEnabled={phase === 'idle'}
+          wakeFlash={wakeFlash}
+          templateColors={templateOrbColors}
+        />
         <div className="mt-5" style={{ minHeight: 44 }}>
           {phase === 'idle' && !hasSpeechAPI && (
             <p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>

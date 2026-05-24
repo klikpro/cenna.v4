@@ -9,6 +9,7 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import AiConfig from './components/AiConfig';
 import ApiSettings from './components/ApiSettings';
+import ConversationTemplate from './components/ConversationTemplate';
 import AuditLog from './components/AuditLog';
 import Settings from './components/Settings';
 import {
@@ -23,6 +24,7 @@ type ActivePage =
   | 'login'
   | 'dashboard'
   | 'ai'
+  | 'templates'
   | 'api'
   | 'logs'
   | 'settings';
@@ -120,6 +122,7 @@ export default function App() {
     login:     '',
     dashboard: 'Overview Dashboard',
     ai:        'Asisten AI & Prompts',
+    templates: 'Conversation Template',
     api:       'API & Integrasi',
     logs:      'Keamanan Audit Log',
     settings:  'Pengaturan',
@@ -130,6 +133,7 @@ export default function App() {
     login:     '',
     dashboard: 'Pusat Kontrol CENNA AI Voice Assistant',
     ai:        'Konfigurasi prompt, perilaku, dan reasoning engine AI',
+    templates: 'Percakapan terskript tanpa AI — atur alur, jawaban, dan visual per langkah',
     api:       'Kredensial Supabase dan integrasi STT/TTS',
     logs:      'Rekam jejak aktivitas sistem',
     settings:  'Identitas platform dan preferensi',
@@ -178,6 +182,15 @@ export default function App() {
             }`}
           >
             <span>🤖</span> Konfigurasi AI
+          </button>
+          <button
+            id="btn-sidebar-templates"
+            onClick={() => setPage('templates')}
+            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
+              page === 'templates' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <span>📋</span> Conversation Template
           </button>
           <button
             id="btn-sidebar-api"
@@ -278,6 +291,7 @@ export default function App() {
             />
           )}
           {page === 'ai' && <AiConfig />}
+          {page === 'templates' && <ConversationTemplate />}
           {page === 'api' && (
             <ApiSettings onSettingsSaved={() => {}} />
           )}

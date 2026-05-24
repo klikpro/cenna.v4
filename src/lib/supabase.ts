@@ -267,86 +267,27 @@ export async function sbDumpAllSettingKeys(): Promise<void> {
   console.groupEnd();
 }
 
-// —— DOCTORS ————————————————————————————————————————————————————————————————————————
+// ── CONVERSATION TEMPLATES ──────────────────────────────────────────────────
+// Disimpan di app_settings key 'conversation_templates' — tidak perlu tabel baru.
 
-export async function sbGetDoctors(): Promise<Doctor[]> {
-  const client = getSupabaseClient();
-  if (!client) return getLocalDoctors();
-  const { data, error } = await client.from('doctors').select('*').order('created_at', { ascending: false });
-  if (error) { console.error(error); return getLocalDoctors(); }
-  return (data ?? []) as Doctor[];
+export async function sbGetTemplates(): Promise<import('../types').ConversationTemplate[]> {
+  try {
+    const data = await sbGetSetting<import('../types').ConversationTemplate[]>('conversation_templates');
+    return data || [];
+  } catch { return []; }
 }
 
-export async function sbUpsertDoctor(doc: Doctor): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalDoctors([doc, ...getLocalDoctors().filter(d => d.id !== doc.id)]); return; }
-  const { error } = await client.from('doctors').upsert(doc, { onConflict: 'id' });
-  if (error) throw new Error(error.message);
+export async function sbSaveTemplates(templates: import('../types').ConversationTemplate[]): Promise<void> {
+  await sbSetSetting('conversation_templates', templates);
 }
 
-export async function sbDeleteDoctor(id: string): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalDoctors(getLocalDoctors().filter(d => d.id !== id)); return; }
-  const { error } = await client.from('doctors').delete().eq('id', id);
-  if (error) throw new Error(error.message);
-}
-
-// —— DRUGS —————————————————————————————————————————————————————————————————————————
-
-export async function sbGetDrugs(): Promise<Drug[]> {
-  const client = getSupabaseClient();
-  if (!client) return getLocalDrugs();
-  const { data, error } = await client.from('drugs').select('*').order('generic');
-  if (error) { console.error(error); return getLocalDrugs(); }
-  return (data ?? []) as Drug[];
-}
-
-export async function sbUpsertDrug(drug: Drug): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalDrugs([drug, ...getLocalDrugs().filter(d => d.id !== drug.id)]); return; }
-  const { error } = await client.from('drugs').upsert(drug, { onConflict: 'id' });
-  if (error) throw new Error(error.message);
-}
-
-export async function sbDeleteDrug(id: string): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalDrugs(getLocalDrugs().filter(d => d.id !== id)); return; }
-  const { error } = await client.from('drugs').delete().eq('id', id);
-  if (error) throw new Error(error.message);
-}
-
-// —— ICD-10 CODES ———————————————————————————————————————————————————————————————————
-
-export async function sbGetIcd(): Promise<IcdCode[]> {
-  const client = getSupabaseClient();
-  if (!client) return getLocalIcd();
-  const { data, error } = await client.from('icd_codes').select('*').order('code');
-  if (error) { console.error(error); return getLocalIcd(); }
-  return (data ?? []) as IcdCode[];
-}
-
-export async function sbUpsertIcd(code: IcdCode): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalIcd([code, ...getLocalIcd().filter(c => c.id !== code.id)]); return; }
-  const { error } = await client.from('icd_codes').upsert(code, { onConflict: 'id' });
-  if (error) throw new Error(error.message);
-}
-
-export async function sbDeleteIcd(id: string): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalIcd(getLocalIcd().filter(c => c.id !== id)); return; }
-  const { error } = await client.from('icd_codes').delete().eq('id', id);
-  if (error) throw new Error(error.message);
-}
-
-export async function sbImportIcd(codes: IcdCode[]): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) { saveLocalIcd([...codes, ...getLocalIcd()]); return; }
-  const { error } = await client.from('icd_codes').upsert(codes, { onConflict: 'id' });
-  if (error) throw new Error(error.message);
+export async function sbGetActiveTemplate(): Promise<import('../types').ConversationTemplate | null> {
+  const templates = await sbGetTemplates();
+  return templates.find(t => t.is_active) ?? null;
 }
 
 // —— AUDIT LOGS ————————————————————————————————————————————————————————————————————
+
 
 export async function sbGetLogs(): Promise<AuditLogEntry[]> {
   const client = getSupabaseClient();
