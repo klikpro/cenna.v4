@@ -112,12 +112,27 @@ export const AI_PROVIDERS = [
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: [{ role: 'user', parts: [{ text: userMsg }] }],
-          generationConfig: { temperature: temp, maxOutputTokens: maxTokens },
+          generationConfig: {
+            temperature: temp,
+            maxOutputTokens: Math.max(maxTokens, 256), // minimum 256 agar tidak kosong
+          },
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data));
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      if (!res.ok) {
+        // Tampilkan pesan error Gemini yang deskriptif
+        const errMsg = data.error?.message || JSON.stringify(data);
+        throw new Error(`Gemini API error: ${errMsg}`);
+      }
+      // Cek finish reason — SAFETY / RECITATION / OTHER bisa bikin content null
+      const candidate = data.candidates?.[0];
+      if (!candidate) throw new Error('Gemini: Tidak ada kandidat respons. Cek API key dan model.');
+      const finishReason = candidate.finishReason;
+      if (finishReason === 'SAFETY') throw new Error('Gemini: Respons diblokir filter keamanan (SAFETY).');
+      if (finishReason === 'RECITATION') throw new Error('Gemini: Respons diblokir karena sitasi (RECITATION).');
+      const text = candidate.content?.parts?.[0]?.text;
+      if (!text) throw new Error(`Gemini: Respons kosong (finishReason: ${finishReason || 'unknown'}). Coba model lain atau perpanjang maxTokens.`);
+      return text;
     },
   },
   {
@@ -399,23 +414,24 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     if (!key) { alert(`Isi API Key ${pdef.name} terlebih dahulu.`); return; }
     setAiTestStatus(prev => ({ ...prev, [pid]: 'testing' }));
     try {
+      // Gunakan prompt lebih panjang & jelas agar tidak dipotong
       const result = await pdef.callFn(
         key,
         pdef.defaultModel,
-        'Kamu adalah asisten medis singkat.',
-        'Balas hanya dengan: "CENNA OK"',
+        'Kamu adalah asisten klinis CENNA AI. Jawab singkat sesuai instruksi.',
+        'Balas dengan tepat teks ini tanpa perubahan: CENNA-CONNECTED',
         0.1,
-        20,
+        50, // minimal 50 token agar tidak terpotong
       );
-      if (result.includes('CENNA') || result.length > 0) {
+      if (result && result.length > 0) {
         setAiTestStatus(prev => ({ ...prev, [pid]: 'ok' }));
-        alert(`✅ ${pdef.name} terhubung! Response: "${result.trim()}"`);
+        alert(`✅ ${pdef.name} terhubung!\nResponse: "${result.trim().substring(0, 80)}"`);
       } else {
-        throw new Error('Respons kosong');
+        throw new Error('Respons kosong dari provider');
       }
     } catch (e: any) {
       setAiTestStatus(prev => ({ ...prev, [pid]: 'error' }));
-      alert(`❌ Gagal: ${e.message}`);
+      alert(`❌ Koneksi ${pdef.name} gagal:\n${e.message}`);
     }
   };
 
