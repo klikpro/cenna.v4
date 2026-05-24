@@ -147,12 +147,29 @@ async function callCennaAI(transcript: string): Promise<{
 Berikan respons JSON sesuai format.`
   );
 
-  // Parse JSON — strip markdown fences jika ada
-  const cleaned = raw.replace(/```json|```/gi, '').trim();
+  // Parse JSON — strip markdown fences dan karakter kontrol jika ada
+  const cleaned = raw
+    .replace(/```json|```/gi, '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ') // strip control chars yang bisa break JSON.parse
+    .trim();
+
+  // Ekstrak blok JSON dari dalam string jika ada teks sebelum/sesudah
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   try {
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+    // Pastikan semua field ada dan bertipe benar
+    return {
+      voice_response: typeof parsed.voice_response === 'string' && parsed.voice_response.trim()
+        ? parsed.voice_response.trim()
+        : 'Data percakapan sudah dicatat, dokter.',
+      keluhan:    Array.isArray(parsed.keluhan)    ? parsed.keluhan    : [],
+      obat:       Array.isArray(parsed.obat)       ? parsed.obat       : [],
+      pertanyaan: Array.isArray(parsed.pertanyaan) ? parsed.pertanyaan : [],
+      ringkasan:  typeof parsed.ringkasan === 'string' ? parsed.ringkasan : transcript.slice(0, 80),
+    };
   } catch {
-    // Fallback jika parsing gagal
+    // Fallback jika parsing gagal total
+    console.warn('[Cenna AI] JSON parse failed, raw:', cleaned.slice(0, 200));
     return {
       voice_response: 'Data percakapan sudah dicatat, dokter.',
       keluhan: [],
@@ -844,14 +861,17 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   }, []);
 
   // Reset firedRef ketika phase kembali ke idle (setelah popup/close)
+  // Juga reset saat kembali ke listening (chaining) agar wake-word tidak mati
   useEffect(() => {
-    if (phase === 'idle') {
+    if (phase === 'idle' || phase === 'listening') {
       firedRef.current = false;
-      console.log('[Cenna] phase idle — wake guard reset');
+      console.log('[Cenna] phase', phase, '— wake guard reset');
     }
   }, [phase]);
 
-  // Wake-word aktif saat idle — hook mengelola mic permission sendiri
+  // Wake-word aktif saat idle SAJA — matikan saat fase lain
+  // Bug fix: sebelumnya tidak dimatikan saat processing/responding sehingga
+  // bisa terpicu ulang selagi AI sedang merespons
   useWakeWord(handleWakeWord, phase === 'idle');
 
   const handleAmbientData = useCallback(async (data: CapturedData) => {
@@ -863,16 +883,18 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     }
 
     // Mode AI: masuk fase processing
+    // Snapshot history SEBELUM push agar tidak stale di closure
+    const currentHistory = conversationHistoryRef.current;
+    currentHistory.push({ role: 'user', content: data.transcript });
     setPhase('processing');
     setAiLabel('Menganalisis percakapan…');
-    conversationHistoryRef.current.push({ role: 'user', content: data.transcript });
 
     try {
       setAiLabel('Cenna sedang berpikir…');
       const aiResult = await callCennaAI(data.transcript);
 
       // Simpan respons AI ke history percakapan
-      conversationHistoryRef.current.push({ role: 'assistant', content: aiResult.voice_response });
+      currentHistory.push({ role: 'assistant', content: aiResult.voice_response });
 
       // Fase responding: ucapkan respons AI via TTS
       setPhase('responding');
@@ -890,12 +912,16 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
     } catch (err) {
       console.warn('[Cenna AI] gagal:', err);
+      // Pop entry user yang sudah di-push agar history tidak kotor
+      currentHistory.pop();
       // Fallback ke popup tanpa AI response
       setCapturedData(data);
       setPhase('popup');
     }
   }, [aiEnabled]);
 
+  // Ambient listener aktif saat listening SAJA — tidak saat processing/responding
+  // untuk mencegah double-fire saat AI sedang memproses
   useAmbientListener({
     enabled:   phase === 'listening',
     silenceMs: 3000,
@@ -905,10 +931,12 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const handleClosePopup = () => {
     setCapturedData(null);
     // Kembali ke listening jika history masih ada (chaining conversation)
-    if (conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 10) {
+    // Gunakan < 8 (bukan 10) untuk beri margin aman sebelum batas
+    if (aiEnabled && conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 8) {
       setPhase('listening');
     } else {
       conversationHistoryRef.current = [];
+      firedRef.current = false; // reset wake guard saat kembali ke idle
       setPhase('idle');
     }
   };
@@ -916,6 +944,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const handleEndConversation = () => {
     conversationHistoryRef.current = [];
     setCapturedData(null);
+    firedRef.current = false;
     setPhase('idle');
   };
 
