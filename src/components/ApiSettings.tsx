@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient, addLocalLog, sbSetSetting, sbGetSetting } from '../lib/supabase';
+import { ELEVEN_FREE_VOICES } from './LandingPage';
 
 interface ApiSettingsProps {
   onSettingsSaved: () => void;
@@ -290,6 +291,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [sttProvider, setSttProvider] = useState('openai-whisper');
   const [sttLang, setSttLang] = useState('id');
   const [elevenLabsKey, setElevenLabsKey] = useState('');
+  const [elevenVoiceId, setElevenVoiceId] = useState('cgSgspJ2msm6clMCkdW9');
+  const [elevenSpeed,   setElevenSpeed]   = useState(1.0);
+  const [elevenPreview, setElevenPreview] = useState<'idle'|'loading'|'playing'>('idle');
 
   const currentProviderDef = AI_PROVIDERS.find(p => p.id === activeProvider) || AI_PROVIDERS[0];
 
@@ -331,7 +335,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         setSttLang(localStorage.getItem('STT_LANG') || 'id');
       }
       setSttKey(localStorage.getItem('STT_API_KEY') || '');
-      setElevenLabsKey(localStorage.getItem('ELEVENLABS_API_KEY') || '');
+      setElevenLabsKey((await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '');
+      setElevenVoiceId((await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9');
+      setElevenSpeed((await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0);
     }
     loadSettings();
   }, []);
@@ -441,7 +447,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
     localStorage.setItem('STT_API_KEY', sttKey.trim());
     localStorage.setItem('STT_PROVIDER', sttProvider);
     localStorage.setItem('STT_LANG', sttLang);
-    localStorage.setItem('ELEVENLABS_API_KEY', elevenLabsKey.trim());
+    await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
+    await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
+    await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
     await sbSetSetting('api_stt_config', {
       provider: sttProvider,
       lang: sttLang,
@@ -713,15 +721,17 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
           </div>
 
           {/* ElevenLabs TTS Section */}
-          <div className="border-t border-gray-100 pt-5 space-y-3">
+          <div className="border-t border-gray-100 pt-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="font-bold text-sm text-[#1e2a4a]">🎙️ ElevenLabs TTS — Suara Cenna</h4>
-                <p className="text-[10px] text-slate-400 mt-0.5">Voice: Jessica · Model: eleven_multilingual_v2 (free tier) · Upgrade untuk Charlotte</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Free-tier voices · Model: eleven_multilingual_v2</p>
               </div>
               <a href="https://elevenlabs.io" target="_blank" rel="noreferrer"
                 className="text-[10px] text-blue-500 hover:underline">Dapatkan Key ↗</a>
             </div>
+
+            {/* API Key */}
             <div className="space-y-1">
               <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">ElevenLabs API Key</label>
               <div className="flex gap-2 items-center">
@@ -737,8 +747,84 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                   <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold whitespace-nowrap">✓ Key ada</span>
                 )}
               </div>
-              <p className="text-[10px] text-slate-400">Voice: Jessica · Model: eleven_multilingual_v2 · Fallback ke browser TTS jika kosong</p>
             </div>
+
+            {/* Voice Picker */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Pilih Suara</label>
+              <div className="grid grid-cols-3 gap-2">
+                {ELEVEN_FREE_VOICES.map(v => (
+                  <button
+                    key={v.id}
+                    onClick={() => setElevenVoiceId(v.id)}
+                    className={`p-2.5 rounded-xl border-2 text-left transition cursor-pointer ${
+                      elevenVoiceId === v.id
+                        ? 'border-[#1e2a4a] bg-[#1e2a4a]/5'
+                        : 'border-gray-200 hover:border-[#1e2a4a]/40 bg-white'
+                    }`}
+                  >
+                    <p className="text-[11px] font-bold text-[#1e2a4a] leading-tight">{v.name}</p>
+                    <p className="text-[9px] text-slate-400 mt-0.5 leading-tight">{v.desc}</p>
+                    {elevenVoiceId === v.id && (
+                      <div className="mt-1 w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Speed Slider */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Kecepatan Bicara</label>
+                <span className="text-[11px] font-mono font-bold text-[#1e2a4a]">
+                  {elevenSpeed === 0.7 ? 'Lambat' : elevenSpeed === 1.0 ? 'Normal' : elevenSpeed === 1.2 ? 'Cepat' : `×${elevenSpeed}`}
+                </span>
+              </div>
+              <input
+                type="range" min="0.7" max="1.2" step="0.1"
+                value={elevenSpeed}
+                onChange={e => setElevenSpeed(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-gray-200 appearance-none cursor-pointer accent-[#1e2a4a] rounded-lg"
+              />
+              <div className="flex justify-between text-[9px] text-slate-400">
+                <span>0.7× Lambat</span><span>1.0× Normal</span><span>1.2× Cepat</span>
+              </div>
+            </div>
+
+            {/* Preview Button */}
+            <button
+              disabled={!elevenLabsKey || elevenPreview === 'loading'}
+              onClick={async () => {
+                if (!elevenLabsKey) return;
+                setElevenPreview('loading');
+                try {
+                  const res = await fetch(
+                    `https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}/stream`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'xi-api-key': elevenLabsKey },
+                      body: JSON.stringify({
+                        text: 'Halo dokter, ada yang bisa Cenna bantu?',
+                        model_id: 'eleven_multilingual_v2',
+                        voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.20, use_speaker_boost: true, speed: elevenSpeed },
+                      }),
+                    }
+                  );
+                  if (!res.ok) { alert('Preview gagal: ' + res.status); setElevenPreview('idle'); return; }
+                  const blob = await res.blob();
+                  const url  = URL.createObjectURL(blob);
+                  const audio = new Audio(url);
+                  setElevenPreview('playing');
+                  audio.onended = () => { URL.revokeObjectURL(url); setElevenPreview('idle'); };
+                  audio.onerror = () => { URL.revokeObjectURL(url); setElevenPreview('idle'); };
+                  await audio.play();
+                } catch { setElevenPreview('idle'); }
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-[#1e2a4a]/8 hover:bg-[#1e2a4a]/15 text-[#1e2a4a] text-xs font-bold rounded-xl border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition"
+            >
+              {elevenPreview === 'loading' ? '⏳ Memuat...' : elevenPreview === 'playing' ? '🔊 Memutar...' : '▶️ Preview Suara'}
+            </button>
           </div>
           <div className="pt-4 border-t border-gray-100">
             <button id="btn-save-stt" onClick={handleSaveSTT}

@@ -15,6 +15,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { sbGetSetting } from '../lib/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -138,19 +139,29 @@ function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 
   return { keluhan, obat, pertanyaan };
 }
 
-// ─── ElevenLabs TTS ──────────────────────────────────────────────────────────────────
+// ─── ElevenLabs TTS ─────────────────────────────────────────────────────────
 //
-// Model  : eleven_multilingual_v2  (free tier compatible)
-// Voice  : Jessica (cgSgspJ2msm6clMCkdW9) — default voice, free tier
-// Fallback: browser speechSynthesis jika API key tidak ada / error
+// Free-tier default voices (tidak perlu plan berbayar):
+// Semua voice & model dibaca dari localStorage agar bisa diubah dari UI.
 
-const ELEVEN_VOICE_ID = 'cgSgspJ2msm6clMCkdW9'; // Jessica - free tier
-const ELEVEN_MODEL_ID = 'eleven_multilingual_v2'; // free tier compatible
+const ELEVEN_FREE_VOICES = [
+  { id: 'cgSgspJ2msm6clMCkdW9', name: 'Jessica',  desc: 'Warm & clear, cocok untuk sapaan' },
+  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah',    desc: 'Soft & professional' },
+  { id: 'FGY2WhTYpPnrIDTdsKH5', name: 'Laura',    desc: 'Upbeat & friendly' },
+  { id: 'iP95p4xoKVk53GoZ742B', name: 'Chris',    desc: 'Casual & conversational (male)' },
+  { id: 'nPczCjzI2devNBz1zQrb', name: 'Brian',    desc: 'Deep & authoritative (male)' },
+  { id: 'N2lVS1w4EtoT3dr4eOWO', name: 'Callum',   desc: 'Crisp & neutral (male)' },
+  { id: 'onwK4e9ZLuTAKqWW03F9', name: 'Daniel',   desc: 'British, warm (male)' },
+  { id: 'pqHfZKP75CvOlQylNhV4', name: 'Bill',     desc: 'Mature & calm (male)' },
+  { id: 'XrExE9yKIg1WjnnlVkGX', name: 'Matilda',  desc: 'Cheerful & bright' },
+];
+
+export { ELEVEN_FREE_VOICES };
 
 async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
   const apiKey =
     (import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined) ||
-    localStorage.getItem('ELEVENLABS_API_KEY') ||
+    (await sbGetSetting<string>('ELEVENLABS_API_KEY')) ||
     '';
 
   if (!apiKey) {
@@ -159,9 +170,12 @@ async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
     return;
   }
 
+  const voiceId = (await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9';
+  const speed   = (await sbGetSetting<number>('ELEVEN_SPEED'))   ?? 1.0;
+
   try {
     const res = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
       {
         method: 'POST',
         headers: {
@@ -170,12 +184,13 @@ async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
         },
         body: JSON.stringify({
           text,
-          model_id: ELEVEN_MODEL_ID,
+          model_id: 'eleven_multilingual_v2',
           voice_settings: {
-            stability: 0.45,
+            stability:        0.45,
             similarity_boost: 0.80,
-            style: 0.20,
+            style:            0.20,
             use_speaker_boost: true,
+            speed,             // 0.7 – 1.2 didukung eleven_multilingual_v2
           },
         }),
       },
@@ -188,13 +203,14 @@ async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
       return;
     }
 
-    const blob   = await res.blob();
-    const url    = URL.createObjectURL(blob);
-    const audio  = new Audio(url);
+    const blob  = await res.blob();
+    const url   = URL.createObjectURL(blob);
+    const audio = new Audio(url);
     audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
     audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
     await audio.play();
-    console.log('[Cenna TTS] ElevenLabs playing — Charlotte');
+    const voiceName = ELEVEN_FREE_VOICES.find(v => v.id === voiceId)?.name ?? voiceId;
+    console.log(`[Cenna TTS] ElevenLabs playing — ${voiceName} ×${speed}`);
   } catch (err) {
     console.warn('[Cenna TTS] fetch error:', err);
     speakBrowser(text, onEnd);
@@ -204,13 +220,12 @@ async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
 function speakBrowser(text: string, onEnd: () => void): void {
   if (!('speechSynthesis' in window)) { onEnd(); return; }
   window.speechSynthesis.cancel();
-  const utt     = new SpeechSynthesisUtterance(text);
-  utt.lang      = 'id-ID';
-  utt.rate      = 0.95;
-  utt.onend     = onEnd;
-  utt.onerror   = onEnd;
+  const utt   = new SpeechSynthesisUtterance(text);
+  utt.lang    = 'id-ID';
+  utt.rate    = 1.0;
+  utt.onend   = onEnd;
+  utt.onerror = onEnd;
   window.speechSynthesis.speak(utt);
-  // Chrome bug fallback
   setTimeout(onEnd, 6000);
 }
 //
