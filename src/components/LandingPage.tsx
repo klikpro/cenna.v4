@@ -105,6 +105,22 @@ function matchesWakeWord(raw: string): boolean {
   return fuzzy;
 }
 
+// ─── Kata penutup sesi (voice trigger untuk akhiri) ─────────────────────────
+const CLOSING_PATTERNS = [
+  'terima kasih cenna', 'terima kasih senna', 'terima kasih kena',
+  'makasih cenna', 'makasih senna',
+  'cukup cenna', 'cukup senna',
+  'selesai cenna', 'selesai senna',
+  'stop cenna', 'stop senna',
+  'akhiri sesi', 'akhiri konsultasi',
+  'terima kasih ya',
+];
+
+function matchesClosingWord(raw: string): boolean {
+  const t = normalizeText(raw);
+  return CLOSING_PATTERNS.some(p => t.includes(p));
+}
+
 // ─── AI Voice Assistant: system prompt + structured output ───────────────────
 
 const CENNA_VOICE_SYSTEM_PROMPT = `Kamu adalah CENNA — asisten klinis suara berbahasa Indonesia yang membantu dokter saat konsultasi berjalan.
@@ -113,6 +129,7 @@ Tugas utama:
 1. Dengarkan transkrip percakapan dokter-pasien.
 2. Berikan RESPONS SUARA yang natural, singkat (1-3 kalimat), empatik, dan relevan secara klinis.
 3. Sekaligus, ekstrak data medis terstruktur dari percakapan tersebut.
+4. Deteksi apakah percakapan mengandung sinyal penutup sesi (dokter pamit, "terima kasih", "selesai", dsb).
 
 Aturan respons suara:
 - Jawab dalam Bahasa Indonesia yang natural dan hangat.
@@ -122,6 +139,7 @@ Aturan respons suara:
 - Jika tidak ada konteks klinis jelas, cukup konfirmasi bahwa data tercatat.
 - JANGAN menyebut nama obat spesifik tanpa konteks yang jelas.
 - JANGAN beri diagnosis — hanya bantu catat dan identifikasi.
+- Jika session_end true, tutup dengan kalimat pamit yang hangat.
 
 Format output WAJIB JSON (tidak ada teks di luar JSON):
 {
@@ -129,19 +147,29 @@ Format output WAJIB JSON (tidak ada teks di luar JSON):
   "keluhan": ["<keluhan 1>", "<keluhan 2>"],
   "obat": ["<obat/terapi 1>"],
   "pertanyaan": ["<pertanyaan klinis yang terdeteksi>"],
-  "ringkasan": "<ringkasan 1 kalimat untuk pop-up>"
+  "ringkasan": "<ringkasan 1 kalimat>",
+  "session_end": false
 }`;
 
-async function callCennaAI(transcript: string): Promise<{
+async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
   voice_response: string;
   keluhan: string[];
   obat: string[];
   pertanyaan: string[];
   ringkasan: string;
+  session_end: boolean;
 }> {
+  // Susun konteks ronde sebelumnya sebagai bagian dari prompt
+  const historyContext = history.length > 0
+    ? '\n\nKonteks percakapan sebelumnya dalam sesi ini:\n' +
+      history.map((h, i) => `[${h.role === 'user' ? 'Dokter/Pasien' : 'Cenna'}]: ${h.content}`).join('\n')
+    : '';
+
   const raw = await callActiveAI(
     CENNA_VOICE_SYSTEM_PROMPT,
-    `Transkrip percakapan:
+    `Transkrip percakapan terbaru:${historyContext}
+
+[Transkrip baru — Ronde ${Math.ceil((history.length + 1) / 2)}]:
 "${transcript}"
 
 Berikan respons JSON sesuai format.`
@@ -166,6 +194,7 @@ Berikan respons JSON sesuai format.`
       obat:       Array.isArray(parsed.obat)       ? parsed.obat       : [],
       pertanyaan: Array.isArray(parsed.pertanyaan) ? parsed.pertanyaan : [],
       ringkasan:  typeof parsed.ringkasan === 'string' ? parsed.ringkasan : transcript.slice(0, 80),
+      session_end: parsed.session_end === true || matchesClosingWord(transcript),
     };
   } catch {
     // Fallback jika parsing gagal total
@@ -176,6 +205,7 @@ Berikan respons JSON sesuai format.`
       obat: [],
       pertanyaan: [],
       ringkasan: transcript.slice(0, 80),
+      session_end: matchesClosingWord(transcript),
     };
   }
 }
@@ -808,8 +838,19 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [capturedData, setCapturedData] = useState<CapturedData | null>(null);
   const [customLogoUrl, setCustomLogoUrl] = useState<string | null>(null);
   const [aiLabel,      setAiLabel]      = useState('Cenna sedang berpikir…');
-  const [aiEnabled,    setAiEnabled]    = useState(false); // true jika AI key tersedia
+  const [aiEnabled,    setAiEnabled]    = useState(false);
   const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
+  const sessionDataRef = useRef<CapturedData[]>([]);
+
+  function mergeSessionData(all: CapturedData[]): CapturedData {
+    return {
+      transcript: all.map(d => d.transcript).join(' — '),
+      keluhan:    Array.from(new Set(all.flatMap(d => d.keluhan))),
+      obat:       Array.from(new Set(all.flatMap(d => d.obat))),
+      pertanyaan: Array.from(new Set(all.flatMap(d => d.pertanyaan))),
+      waktu:      all[0]?.waktu ?? '',
+    };
+  }
 
   useEffect(() => {
     sbGetSetting<{ logoUrl?: string }>('branding').then(b => {
@@ -888,14 +929,12 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleAmbientData = useCallback(async (data: CapturedData) => {
     if (!aiEnabled) {
-      // Fallback: mode lama tanpa AI
+      // Mode dasar tanpa AI: langsung kembali listening, simpan data diam-diam
       setCapturedData(data);
-      setPhase('popup');
+      setPhase('listening'); // handsfree — tidak popup
       return;
     }
 
-    // Mode AI: masuk fase processing
-    // Snapshot history SEBELUM push agar tidak stale di closure
     const currentHistory = conversationHistoryRef.current;
     currentHistory.push({ role: 'user', content: data.transcript });
     setPhase('processing');
@@ -903,13 +942,10 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
     try {
       setAiLabel('Cenna sedang berpikir…');
-      const aiResult = await callCennaAI(data.transcript);
+      const aiResult = await callCennaAI(data.transcript, currentHistory.slice(0, -1));
 
-      // Simpan respons AI ke history percakapan
       currentHistory.push({ role: 'assistant', content: aiResult.voice_response });
 
-      // Fase responding: ucapkan respons AI via TTS
-      setPhase('responding');
       const enrichedData: CapturedData = {
         ...data,
         keluhan:    aiResult.keluhan.length    ? aiResult.keluhan    : data.keluhan,
@@ -917,18 +953,29 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         pertanyaan: aiResult.pertanyaan.length ? aiResult.pertanyaan : data.pertanyaan,
       };
 
-      speakElevenLabs(aiResult.voice_response, () => {
-        setCapturedData(enrichedData);
-        setPhase('popup');
-      });
+      // Akumulasi semua data sesi ke dalam sessionDataRef
+      sessionDataRef.current.push(enrichedData);
+
+      setPhase('responding');
+
+      if (aiResult.session_end) {
+        // Kata penutup terdeteksi — ucapkan, lalu tampilkan ringkasan sesi
+        speakElevenLabs(aiResult.voice_response, () => {
+          setCapturedData(mergeSessionData(sessionDataRef.current));
+          setPhase('popup'); // popup HANYA di akhir sesi
+        });
+      } else {
+        // Normal — ucapkan, langsung balik listening (handsfree)
+        speakElevenLabs(aiResult.voice_response, () => {
+          setPhase('listening');
+        });
+      }
 
     } catch (err) {
       console.warn('[Cenna AI] gagal:', err);
-      // Pop entry user yang sudah di-push agar history tidak kotor
       currentHistory.pop();
-      // Fallback ke popup tanpa AI response
-      setCapturedData(data);
-      setPhase('popup');
+      // Pada error, tetap kembali ke listening — jangan popup
+      setPhase('listening');
     }
   }, [aiEnabled]);
 
@@ -942,19 +989,15 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleClosePopup = () => {
     setCapturedData(null);
-    // Kembali ke listening jika history masih ada (chaining conversation)
-    // Gunakan < 8 (bukan 10) untuk beri margin aman sebelum batas
-    if (aiEnabled && conversationHistoryRef.current.length > 0 && conversationHistoryRef.current.length < 8) {
-      setPhase('listening');
-    } else {
-      conversationHistoryRef.current = [];
-      firedRef.current = false; // reset wake guard saat kembali ke idle
-      setPhase('idle');
-    }
+    conversationHistoryRef.current = [];
+    sessionDataRef.current = [];
+    firedRef.current = false;
+    setPhase('idle');
   };
 
   const handleEndConversation = () => {
     conversationHistoryRef.current = [];
+    sessionDataRef.current = [];
     setCapturedData(null);
     firedRef.current = false;
     setPhase('idle');
@@ -962,6 +1005,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const handleSOAP = () => {
     conversationHistoryRef.current = [];
+    sessionDataRef.current = [];
     setCapturedData(null);
     onLoginClick();
   };
@@ -1020,7 +1064,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
               </p>
               {conversationHistoryRef.current.length > 0 && (
                 <p className="text-[9px] tracking-[0.08em] text-[#7F77DD]/50 mt-1" style={{ fontFamily: "'DM Mono', monospace" }}>
-                  ronde {Math.ceil(conversationHistoryRef.current.length / 2)} percakapan
+                  ronde {Math.ceil(conversationHistoryRef.current.length / 2) + 1} / 6
                 </p>
               )}
             </>
