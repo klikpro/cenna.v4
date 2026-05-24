@@ -17,7 +17,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { sbGetSetting, sbSetSetting, sbSaveSession } from '../lib/supabase';
 import { callActiveAI } from './ApiSettings';
+import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './tts-constants';
 import type { AnamnesisData, ClinicalConclusion } from '../types';
+
+// Re-export agar komponen lain yang sudah import dari LandingPage tidak perlu diubah
+export { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './tts-constants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
