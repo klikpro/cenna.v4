@@ -140,12 +140,12 @@ function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 
 
 // ─── ElevenLabs TTS ──────────────────────────────────────────────────────────────────
 //
-// Model  : eleven_flash_v2_5  (latensi rendah, real-time)
-// Voice  : Charlotte  — ID: XB0fDUnXU5powFXDhCwa
+// Model  : eleven_multilingual_v2  (free tier compatible)
+// Voice  : Jessica (cgSgspJ2msm6clMCkdW9) — default voice, free tier
 // Fallback: browser speechSynthesis jika API key tidak ada / error
 
-const ELEVEN_VOICE_ID = 'XB0fDUnXU5powFXDhCwa'; // Charlotte
-const ELEVEN_MODEL_ID = 'eleven_flash_v2_5';
+const ELEVEN_VOICE_ID = 'cgSgspJ2msm6clMCkdW9'; // Jessica - free tier
+const ELEVEN_MODEL_ID = 'eleven_multilingual_v2'; // free tier compatible
 
 async function speakElevenLabs(text: string, onEnd: () => void): Promise<void> {
   const apiKey =

@@ -717,7 +717,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="font-bold text-sm text-[#1e2a4a]">🎙️ ElevenLabs TTS — Suara Cenna</h4>
-                <p className="text-[10px] text-slate-400 mt-0.5">Suara Charlotte (eleven_flash_v2_5) untuk sapaan wake word</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Voice: Jessica · Model: eleven_multilingual_v2 (free tier) · Upgrade untuk Charlotte</p>
               </div>
               <a href="https://elevenlabs.io" target="_blank" rel="noreferrer"
                 className="text-[10px] text-blue-500 hover:underline">Dapatkan Key ↗</a>
@@ -737,7 +737,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                   <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold whitespace-nowrap">✓ Key ada</span>
                 )}
               </div>
-              <p className="text-[10px] text-slate-400">Voice: Charlotte · Model: eleven_flash_v2_5 · Fallback ke browser TTS jika kosong</p>
+              <p className="text-[10px] text-slate-400">Voice: Jessica · Model: eleven_multilingual_v2 · Fallback ke browser TTS jika kosong</p>
             </div>
           </div>
           <div className="pt-4 border-t border-gray-100">
