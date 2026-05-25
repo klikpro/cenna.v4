@@ -542,19 +542,29 @@ async function speak(text: string, onEnd: () => void): Promise<void> {
 // emergencyStopAllMic() memanggil stop() pada semua track — melepas mic di browser.
 const _globalMicTracks = new Set<MediaStreamTrack>();
 
-/** Hentikan SEMUA track mikrofon secara paksa (dipanggil saat masuk admin dashboard) */
+// ─── Global SpeechRecognition registry ───────────────────────────────────────
+// Setiap instance SpeechRecognition yang aktif didaftarkan di sini.
+// emergencyStopAllMic() memanggil abort() pada semua instance — menghentikan STT.
+const _globalSpeechRecs = new Set<SpeechRecognition>();
+
+/** Hentikan SEMUA track mikrofon DAN SpeechRecognition secara paksa */
 export function emergencyStopAllMic(): void {
+  // 1. Hentikan semua MediaStream track (indikator mic di browser)
   _globalMicTracks.forEach(track => {
     try { track.stop(); } catch { /* ignore */ }
   });
   _globalMicTracks.clear();
-  // Juga hentikan SpeechRecognition global jika ada
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR && window.speechSynthesis) window.speechSynthesis.cancel();
-  } catch { /* ignore */ }
-  console.log('[Cenna] emergencyStopAllMic — semua mic track dihentikan');
+
+  // 2. Hentikan semua SpeechRecognition instance yang aktif (bug utama: ini yang sebelumnya tidak dilakukan)
+  _globalSpeechRecs.forEach(rec => {
+    try { rec.abort(); } catch { /* ignore */ }
+  });
+  _globalSpeechRecs.clear();
+
+  // 3. Hentikan TTS juga agar tidak ada suara tersisa
+  try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+
+  console.log('[Cenna] emergencyStopAllMic — semua mic track + SpeechRecognition dihentikan');
 }
 
 
@@ -577,13 +587,16 @@ function useWakeWord(onDetected: () => void, active: boolean) {
   const stop = useCallback(() => {
     runningRef.current = false;
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    try { recRef.current?.abort(); } catch { /* ignore */ }
-    recRef.current = null;
+    if (recRef.current) {
+      try { recRef.current.abort(); } catch { /* ignore */ }
+      _globalSpeechRecs.delete(recRef.current); // ← hapus dari registry global
+      recRef.current = null;
+    }
     // Stop semua track dan hapus dari registry global
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         try { track.stop(); } catch { /* ignore */ }
-        _globalMicTracks.delete(track);          // ← hapus dari registry
+        _globalMicTracks.delete(track);
       });
       streamRef.current = null;
       console.log('[Cenna wake] MediaStream tracks stopped — mic released');
@@ -637,11 +650,13 @@ function useWakeWord(onDetected: () => void, active: boolean) {
 
     rec.onend = () => {
       console.log('[Cenna wake] session ended, restarting...');
+      _globalSpeechRecs.delete(rec); // ← instance sudah ended, hapus dari registry
       scheduleRestart(200);
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
       console.warn('[Cenna wake] error:', e.error);
+      _globalSpeechRecs.delete(rec); // ← instance error, hapus dari registry
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         // Mic ditolak → stop total, jangan retry
         stopRef.current();
@@ -651,11 +666,14 @@ function useWakeWord(onDetected: () => void, active: boolean) {
     };
 
     recRef.current = rec;
+    _globalSpeechRecs.add(rec); // ← daftarkan ke registry global
     try {
       rec.start();
       console.log('[Cenna wake] rec.start() called');
     } catch (err) {
       console.warn('[Cenna wake] rec.start() threw:', err);
+      _globalSpeechRecs.delete(rec);
+      recRef.current = null;
       scheduleRestart(800);
     }
   }, []);
@@ -740,8 +758,11 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   const stop = useCallback(() => {
     runningRef.current = false;
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-    try { recRef.current?.abort(); } catch { /* ignore */ }
-    recRef.current = null;
+    if (recRef.current) {
+      try { recRef.current.abort(); } catch { /* ignore */ }
+      _globalSpeechRecs.delete(recRef.current); // ← hapus dari registry global
+      recRef.current = null;
+    }
     // Hentikan MediaStream ambient dan hapus dari registry global
     if (ambientStreamRef.current) {
       ambientStreamRef.current.getTracks().forEach(t => {
@@ -792,11 +813,13 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
     };
 
     rec.onend = () => {
+      _globalSpeechRecs.delete(rec); // ← instance sudah ended, hapus dari registry
       runningRef.current = false;
       recRef.current     = null;
       if (enabledRef.current) setTimeout(start, 150);
     };
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
+      _globalSpeechRecs.delete(rec); // ← instance error, hapus dari registry
       if (e.error === 'not-allowed') { stopRef.current(); return; }
       runningRef.current = false;
       recRef.current     = null;
@@ -804,7 +827,14 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
     };
 
     recRef.current = rec;
-    try { rec.start(); } catch { setTimeout(start, 800); }
+    _globalSpeechRecs.add(rec); // ← daftarkan ke registry global
+    try {
+      rec.start();
+    } catch {
+      _globalSpeechRecs.delete(rec);
+      recRef.current = null;
+      setTimeout(start, 800);
+    }
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
