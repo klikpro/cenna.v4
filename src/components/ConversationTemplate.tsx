@@ -97,9 +97,10 @@ function ColorPicker({ label, value, onChange }: { label: string; value: string;
 // ─── StepCard ────────────────────────────────────────────────────────────────
 
 interface StepCardProps {
-  step: ConversationStep;
-  index: number;
-  total: number;
+  key?:    React.Key;
+  step:    ConversationStep;
+  index:   number;
+  total:   number;
   onChange: (updated: ConversationStep) => void;
   onDelete: () => void;
   onMoveUp: () => void;
@@ -511,18 +512,22 @@ export default function ConversationTemplate() {
               </div>
             )}
 
-            {selected.steps.map((step, idx) => (
-              <StepCard
-                key={step.id}
-                step={step}
-                index={idx}
-                total={selected.steps.length}
-                onChange={updated => handleStepChange(idx, updated)}
-                onDelete={() => handleDeleteStep(idx)}
-                onMoveUp={() => handleMoveStep(idx, -1)}
-                onMoveDown={() => handleMoveStep(idx, 1)}
-              />
-            ))}
+            {selected.steps.map((step, idx) => {
+              const stepKey = step.id;
+              return (
+                <StepCard
+                  key={stepKey}
+                  step={step}
+                  index={idx}
+                  total={selected.steps.length}
+                  onChange={updated => handleStepChange(idx, updated)}
+                  onDelete={() => handleDeleteStep(idx)}
+                  onMoveUp={() => handleMoveStep(idx, -1)}
+                  onMoveDown={() => handleMoveStep(idx, 1)}
+                />
+              );
+            })}
+
 
             {selected.steps.length > 0 && (
               <div className="flex items-center gap-3 py-3 px-4 bg-[#1e2a4a]/4 rounded-xl border border-dashed border-[#1e2a4a]/15">

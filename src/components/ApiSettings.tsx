@@ -311,21 +311,25 @@ export function clearAiConfigCache() {
 }
 
 export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
-  if (_aiConfigCache) return _aiConfigCache;
+  if (_aiConfigCache) { console.debug('[CENNA:loadAiConfigFromDb] Returning cached config', _aiConfigCache); return _aiConfigCache; }
 
+  console.debug('[CENNA:loadAiConfigFromDb] Fetching api_ai_config from DB...');
   const dbAiConfig = await sbGetSetting<{
     provider: string; model: string; temperature: number; maxTokens: number;
   }>('api_ai_config');
+  console.debug('[CENNA:loadAiConfigFromDb] api_ai_config result:', dbAiConfig);
 
   const providerId = dbAiConfig?.provider || 'anthropic';
   const provider   = AI_PROVIDERS.find(p => p.id === providerId) || AI_PROVIDERS[0];
+  if (!AI_PROVIDERS.find(p => p.id === providerId)) console.warn('[CENNA:loadAiConfigFromDb] Provider tidak dikenali:', providerId, '— fallback ke', provider.id);
 
   // Baca semua API key per-provider dari DB
   const apiKeys: Record<string, string> = {};
   await Promise.all(
     AI_PROVIDERS.map(async p => {
       const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
-      if (k) apiKeys[p.id] = k;
+      if (k) { apiKeys[p.id] = k; console.debug(`[CENNA:loadAiConfigFromDb] API key ditemukan untuk: ${p.id}`); }
+      else console.warn(`[CENNA:loadAiConfigFromDb] API key KOSONG untuk: ${p.id}`);
     })
   );
 
@@ -336,6 +340,7 @@ export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
     temperature: dbAiConfig?.temperature ?? 0.3,
     maxTokens:   dbAiConfig?.maxTokens   ?? 2048,
   };
+  console.debug('[CENNA:loadAiConfigFromDb] Cache tersimpan:', _aiConfigCache);
   return _aiConfigCache;
 }
 
@@ -344,12 +349,25 @@ export async function callActiveAI(
   systemPrompt: string,
   userMsg: string,
 ): Promise<string> {
+  console.debug('[CENNA:callActiveAI] Memuat konfigurasi AI dari DB/cache...');
   const cfg      = await loadAiConfigFromDb();
   const provider = AI_PROVIDERS.find(p => p.id === cfg!.providerId) || AI_PROVIDERS[0];
   const apiKey   = cfg!.apiKeys[provider.id] || '';
+  console.debug(`[CENNA:callActiveAI] Provider: ${provider.name}, Model: ${cfg!.model}, Temp: ${cfg!.temperature}, MaxTokens: ${cfg!.maxTokens}`);
 
-  if (!apiKey) throw new Error(`API Key untuk ${provider.name} belum dikonfigurasi.`);
-  return provider.callFn(apiKey, cfg!.model, systemPrompt, userMsg, cfg!.temperature, cfg!.maxTokens);
+  if (!apiKey) {
+    console.error(`[CENNA:callActiveAI] API Key untuk ${provider.name} tidak ditemukan di DB!`);
+    throw new Error(`API Key untuk ${provider.name} belum dikonfigurasi.`);
+  }
+  console.debug(`[CENNA:callActiveAI] Memanggil ${provider.name} API...`);
+  try {
+    const result = await provider.callFn(apiKey, cfg!.model, systemPrompt, userMsg, cfg!.temperature, cfg!.maxTokens);
+    console.debug(`[CENNA:callActiveAI] Respons diterima (${result.length} karakter)`);
+    return result;
+  } catch (e: any) {
+    console.error(`[CENNA:callActiveAI] Error dari ${provider.name}:`, e.message);
+    throw e;
+  }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -364,138 +382,180 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [dbError, setDbError] = useState<string | null>(null);
 
   // Multi-AI
-  const [activeProvider, setActiveProvider] = useState('anthropic');
+  const [activeProvider, setActiveProvider] = useState('');
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
-  const [aiModel, setAiModel] = useState('claude-sonnet-4-6');
+  const [aiModel, setAiModel] = useState('');
   const [aiTemp, setAiTemp] = useState(0.3);
   const [aiMaxTokens, setAiMaxTokens] = useState(2048);
   const [aiTestStatus, setAiTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
 
   // STT
   const [sttKey, setSttKey] = useState('');
-  const [sttProvider, setSttProvider] = useState('openai-whisper');
-  const [sttLang, setSttLang] = useState('id');
+  const [sttProvider, setSttProvider] = useState('');
+  const [sttLang, setSttLang] = useState('');
   // ElevenLabs
   const [elevenLabsKey, setElevenLabsKey] = useState('');
-  const [elevenVoiceId, setElevenVoiceId] = useState('cgSgspJ2msm6clMCkdW9');
+  const [elevenVoiceId, setElevenVoiceId] = useState('');
   const [elevenSpeed,   setElevenSpeed]   = useState(1.0);
   const [elevenPreview, setElevenPreview] = useState<'idle'|'loading'|'playing'>('idle');
   // Google TTS
   const [googleTtsKey,    setGoogleTtsKey]    = useState('');
-  const [googleTtsVoice,  setGoogleTtsVoice]  = useState('id-ID-Standard-A');
+  const [googleTtsVoice,  setGoogleTtsVoice]  = useState('');
   const [googleTtsRate,   setGoogleTtsRate]   = useState(1.0);
   // OpenAI TTS
   const [openaiTtsKey,   setOpenaiTtsKey]   = useState('');
-  const [openaiTtsVoice, setOpenaiTtsVoice] = useState('shimmer');
-  const [openaiTtsModel, setOpenaiTtsModel] = useState('tts-1');
+  const [openaiTtsVoice, setOpenaiTtsVoice] = useState('');
+  const [openaiTtsModel, setOpenaiTtsModel] = useState('');
   // Azure TTS
   const [azureTtsKey,    setAzureTtsKey]    = useState('');
-  const [azureTtsRegion, setAzureTtsRegion] = useState('southeastasia');
-  const [azureTtsVoice,  setAzureTtsVoice]  = useState('id-ID-GadisNeural');
+  const [azureTtsRegion, setAzureTtsRegion] = useState('');
+  const [azureTtsVoice,  setAzureTtsVoice]  = useState('');
   const [azureTtsRate,   setAzureTtsRate]   = useState(1.0);
   // TTS provider pilihan
-  const [ttsPrefProvider, setTtsPrefProvider] = useState('elevenlabs');
+  const [ttsPrefProvider, setTtsPrefProvider] = useState('');
+  // TTS preview text — dikonfigurasi admin via DB
+  const [ttsPreviewText, setTtsPreviewText] = useState('');
 
   const currentProviderDef = AI_PROVIDERS.find(p => p.id === activeProvider) || AI_PROVIDERS[0];
 
   useEffect(() => {
     async function loadSettings() {
-      // ── Supabase bootstrap: baca dari ENV vars, fallback ke DB setting, lalu default ──
-      const envUrl  = import.meta.env.VITE_SUPABASE_URL  as string | undefined;
-      const envAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+      console.debug('[CENNA:loadSettings] Memuat semua konfigurasi dari DB...');
+
+      // ── Supabase bootstrap ──
+      const envUrl  = ((import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_URL);
+      const envAnon = ((import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_ANON_KEY);
+      console.debug('[CENNA:loadSettings] ENV VITE_SUPABASE_URL:', envUrl ? 'ada' : 'kosong');
       const dbSupaConfig = await sbGetSetting<{ url: string; anonKey: string; ref: string }>('supabase_bootstrap');
-      // BUG-01 FIX: Tidak ada hardcoded credentials — hanya ENV vars atau DB config
+      console.debug('[CENNA:loadSettings] supabase_bootstrap dari DB:', dbSupaConfig ? 'ada' : 'kosong');
       setSupabaseUrl(envUrl || dbSupaConfig?.url || '');
       setSupabaseAnonKey(envAnon || dbSupaConfig?.anonKey || '');
       setSupabaseRef(dbSupaConfig?.ref || '');
+      if (!envUrl && !dbSupaConfig?.url) console.warn('[CENNA:loadSettings] ⚠️ Supabase URL tidak ditemukan di ENV maupun DB!');
 
-      // ── AI Config: 100% dari Supabase DB ──
+      // ── AI Config ──
+      console.debug('[CENNA:loadSettings] Memuat api_ai_config...');
       const dbAiConfig = await sbGetSetting<{
         provider: string; model: string; temperature: number; maxTokens: number;
       }>('api_ai_config');
-      const savedProvider = dbAiConfig?.provider || 'anthropic';
+      console.debug('[CENNA:loadSettings] api_ai_config:', dbAiConfig);
+      const savedProvider = dbAiConfig?.provider || '';
+      if (!savedProvider) console.warn('[CENNA:loadSettings] ⚠️ AI provider belum dikonfigurasi di DB.');
       setActiveProvider(savedProvider);
 
-      // Load semua API key per-provider dari DB
+      // Load API keys semua provider
       const keys: Record<string, string> = {};
       await Promise.all(
         AI_PROVIDERS.map(async p => {
           const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
           keys[p.id] = k || '';
+          if (!k) console.warn(`[CENNA:loadSettings] ⚠️ API Key kosong untuk provider: ${p.id}`);
+          else console.debug(`[CENNA:loadSettings] ✓ API Key ada untuk: ${p.id}`);
         })
       );
       setProviderKeys(keys);
 
       if (dbAiConfig) {
-        setAiModel(dbAiConfig.model || AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || 'claude-sonnet-4-6');
+        setAiModel(dbAiConfig.model || AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || '');
         setAiTemp(dbAiConfig.temperature ?? 0.3);
         setAiMaxTokens(dbAiConfig.maxTokens ?? 2048);
+        console.debug(`[CENNA:loadSettings] AI model: ${dbAiConfig.model}, temp: ${dbAiConfig.temperature}, maxTokens: ${dbAiConfig.maxTokens}`);
       } else {
-        setAiModel(AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || 'claude-sonnet-4-6');
+        console.warn('[CENNA:loadSettings] ⚠️ api_ai_config tidak ada di DB — model kosong.');
+        setAiModel(AI_PROVIDERS.find(p => p.id === savedProvider)?.defaultModel || '');
         setAiTemp(0.3);
         setAiMaxTokens(2048);
       }
 
-      // ── STT Config: 100% dari Supabase DB ──
+      // ── STT Config ──
+      console.debug('[CENNA:loadSettings] Memuat api_stt_config...');
       const dbSttConfig = await sbGetSetting<{ provider: string; lang: string; sttKey: string }>('api_stt_config');
-      setSttProvider(dbSttConfig?.provider || 'openai-whisper');
-      setSttLang(dbSttConfig?.lang || 'id');
+      console.debug('[CENNA:loadSettings] api_stt_config:', dbSttConfig);
+      if (!dbSttConfig) console.warn('[CENNA:loadSettings] ⚠️ STT config belum dikonfigurasi di DB.');
+      setSttProvider(dbSttConfig?.provider || '');
+      setSttLang(dbSttConfig?.lang || '');
       setSttKey(dbSttConfig?.sttKey || '');
 
-      // ── ElevenLabs: dari DB ──
-      setElevenLabsKey((await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '');
-      setElevenVoiceId((await sbGetSetting<string>('ELEVEN_VOICE_ID')) || 'cgSgspJ2msm6clMCkdW9');
-      setElevenSpeed((await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0);
+      // ── ElevenLabs ──
+      const elKey = await sbGetSetting<string>('ELEVENLABS_API_KEY');
+      const elVoice = await sbGetSetting<string>('ELEVEN_VOICE_ID');
+      const elSpeed = await sbGetSetting<number>('ELEVEN_SPEED');
+      if (!elKey) console.warn('[CENNA:loadSettings] ⚠️ ELEVENLABS_API_KEY kosong.');
+      if (!elVoice) console.warn('[CENNA:loadSettings] ⚠️ ELEVEN_VOICE_ID kosong.');
+      console.debug('[CENNA:loadSettings] ElevenLabs — key:', elKey ? 'ada' : 'kosong', 'voice:', elVoice, 'speed:', elSpeed);
+      setElevenLabsKey(elKey || '');
+      setElevenVoiceId(elVoice || '');
+      setElevenSpeed(elSpeed ?? 1.0);
+
       // ── Google TTS ──
       setGoogleTtsKey((await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '');
-      setGoogleTtsVoice((await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || 'id-ID-Standard-A');
+      setGoogleTtsVoice((await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || '');
       setGoogleTtsRate((await sbGetSetting<number>('GOOGLE_TTS_RATE')) ?? 1.0);
+
       // ── OpenAI TTS ──
       setOpenaiTtsKey((await sbGetSetting<string>('OPENAI_TTS_KEY')) || '');
-      setOpenaiTtsVoice((await sbGetSetting<string>('OPENAI_TTS_VOICE')) || 'shimmer');
-      setOpenaiTtsModel((await sbGetSetting<string>('OPENAI_TTS_MODEL')) || 'tts-1');
+      setOpenaiTtsVoice((await sbGetSetting<string>('OPENAI_TTS_VOICE')) || '');
+      setOpenaiTtsModel((await sbGetSetting<string>('OPENAI_TTS_MODEL')) || '');
+
       // ── Azure TTS ──
       setAzureTtsKey((await sbGetSetting<string>('AZURE_TTS_KEY')) || '');
-      setAzureTtsRegion((await sbGetSetting<string>('AZURE_TTS_REGION')) || 'southeastasia');
-      setAzureTtsVoice((await sbGetSetting<string>('AZURE_TTS_VOICE')) || 'id-ID-GadisNeural');
+      setAzureTtsRegion((await sbGetSetting<string>('AZURE_TTS_REGION')) || '');
+      setAzureTtsVoice((await sbGetSetting<string>('AZURE_TTS_VOICE')) || '');
       setAzureTtsRate((await sbGetSetting<number>('AZURE_TTS_RATE')) ?? 1.0);
-      // ── TTS preferred ──
-      setTtsPrefProvider((await sbGetSetting<string>('tts_provider')) || 'elevenlabs');
+
+      // ── TTS preferred & preview ──
+      const ttsProvider = await sbGetSetting<string>('tts_provider');
+      const ttsPreview  = await sbGetSetting<string>('tts_preview_text');
+      if (!ttsProvider) console.warn('[CENNA:loadSettings] ⚠️ tts_provider belum dipilih di DB.');
+      setTtsPrefProvider(ttsProvider || '');
+      setTtsPreviewText(ttsPreview || '');
+
+      console.debug('[CENNA:loadSettings] ✅ Semua konfigurasi berhasil dimuat.');
     }
-    loadSettings();
+    loadSettings().catch(e => console.error('[CENNA:loadSettings] ❌ Fatal error saat memuat settings:', e));
   }, []);
 
-  // Saat provider berubah, update model ke default provider tersebut
   const handleProviderChange = (pid: string) => {
+    console.debug(`[CENNA:handleProviderChange] Ganti provider: ${activeProvider} → ${pid}`);
     setActiveProvider(pid);
     const def = AI_PROVIDERS.find(p => p.id === pid);
-    if (def) setAiModel(def.defaultModel);
+    if (def) { setAiModel(def.defaultModel); console.debug(`[CENNA:handleProviderChange] Default model: ${def.defaultModel}`); }
+    else console.warn(`[CENNA:handleProviderChange] Provider ${pid} tidak ditemukan di AI_PROVIDERS!`);
   };
 
   const handleSaveSupabase = async () => {
+    console.debug('[CENNA:handleSaveSupabase] Mulai menyimpan konfigurasi Supabase...');
     if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
+      console.warn('[CENNA:handleSaveSupabase] ⚠️ URL atau Anon Key kosong — simpan dibatalkan.');
       alert('Supabase Project URL dan Anon Key wajib diisi.');
       return;
     }
-    // Simpan ke DB (bukan localStorage). ENV vars tetap prioritas utama saat runtime.
-    await sbSetSetting('supabase_bootstrap', {
-      url: supabaseUrl.trim(),
-      anonKey: supabaseAnonKey.trim(),
-      ref: supabaseRef.trim(),
-      updatedAt: new Date().toISOString(),
-    });
-    // Hapus sisa credentials lama dari localStorage jika ada
-    localStorage.removeItem('SUPABASE_URL');
-    localStorage.removeItem('SUPABASE_ANON_KEY');
-    localStorage.removeItem('SUPABASE_REF');
-    setDbStatus('connected');
-    await sbAddLog('success', 'SYSTEM', 'Supabase credentials saved to database.');
-    alert('Konfigurasi Supabase berhasil disimpan ke database! (bukan localStorage)');
-    onSettingsSaved();
+    try {
+      await sbSetSetting('supabase_bootstrap', {
+        url: supabaseUrl.trim(),
+        anonKey: supabaseAnonKey.trim(),
+        ref: supabaseRef.trim(),
+        updatedAt: new Date().toISOString(),
+      });
+      console.debug('[CENNA:handleSaveSupabase] ✅ supabase_bootstrap tersimpan ke DB.');
+      localStorage.removeItem('SUPABASE_URL');
+      localStorage.removeItem('SUPABASE_ANON_KEY');
+      localStorage.removeItem('SUPABASE_REF');
+      setDbStatus('connected');
+      await sbAddLog('success', 'SYSTEM', 'Supabase credentials saved to database.');
+      alert('Konfigurasi Supabase berhasil disimpan ke database! (bukan localStorage)');
+      onSettingsSaved();
+    } catch (e: any) {
+      console.error('[CENNA:handleSaveSupabase] ❌ Gagal menyimpan:', e);
+      setDbStatus('error');
+      alert(`❌ Gagal menyimpan konfigurasi Supabase!\n\n${e.message}`);
+    }
   };
 
   const handleTestDatabase = async () => {
+    console.debug('[CENNA:handleTestDatabase] Menguji koneksi ke Supabase...');
     if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
+      console.warn('[CENNA:handleTestDatabase] ⚠️ URL atau Key kosong — test dibatalkan.');
       alert('Isi URL dan Key terlebih dahulu.');
       return;
     }
@@ -507,29 +567,35 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         headers: { apikey: supabaseAnonKey.trim() },
       });
       const latency = Date.now() - start;
+      console.debug(`[CENNA:handleTestDatabase] HTTP ${res.status} — latency: ${latency}ms`);
       if (res.ok) {
         setDbStatus('connected');
+        console.debug('[CENNA:handleTestDatabase] ✅ Koneksi sukses.');
         alert(`Koneksi Supabase Sukses! Latency: ${latency}ms`);
       } else {
         setDbStatus('error');
         setDbError(`Status: ${res.status}`);
+        console.error(`[CENNA:handleTestDatabase] ❌ HTTP ${res.status} — koneksi gagal.`);
       }
     } catch (e: any) {
       setDbStatus('error');
       setDbError(e.message);
+      console.error('[CENNA:handleTestDatabase] ❌ Exception:', e.message);
     }
   };
 
   const handleSaveAI = async () => {
+    console.debug(`[CENNA:handleSaveAI] Provider: ${activeProvider}, Model: ${aiModel}, Temp: ${aiTemp}, MaxTokens: ${aiMaxTokens}`);
     const key = providerKeys[activeProvider] || '';
     if (!key.trim()) {
+      console.warn(`[CENNA:handleSaveAI] ⚠️ API Key ${currentProviderDef.name} kosong — simpan dibatalkan.`);
       alert(`${currentProviderDef.name} API Key wajib diisi.`);
       return;
     }
     try {
-      // Simpan API key provider ini ke DB
+      console.debug(`[CENNA:handleSaveAI] Menyimpan AI_KEY_${activeProvider.toUpperCase()} ke DB...`);
       await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
-      // Simpan konfigurasi AI aktif ke DB
+      console.debug('[CENNA:handleSaveAI] Menyimpan api_ai_config ke DB...');
       await sbSetSetting('api_ai_config', {
         provider: activeProvider,
         model: aiModel,
@@ -538,12 +604,12 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         keyConfigured: true,
         updatedAt: new Date().toISOString(),
       });
-      // Invalidasi cache in-memory agar callActiveAI baca ulang dari DB
       clearAiConfigCache();
+      console.debug('[CENNA:handleSaveAI] ✅ AI config tersimpan, cache di-invalidate.');
       await sbAddLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
       alert(`✅ Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
     } catch (e: any) {
-      console.error('[handleSaveAI] Error:', e);
+      console.error('[CENNA:handleSaveAI] ❌ Error:', e);
       alert(`❌ Gagal menyimpan ke database!\n\n${e.message}\n\nKemungkinan RLS policy tabel app_settings tidak mengizinkan INSERT/UPDATE. Jalankan SQL ini di Supabase Dashboard:\n\nCREATE POLICY \"allow_auth_write\" ON app_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);\nCREATE POLICY \"allow_anon_read\" ON app_settings FOR SELECT TO anon USING (true);`);
     }
   };
@@ -551,18 +617,24 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const handleTestAI = async (pid: string) => {
     const pdef = AI_PROVIDERS.find(p => p.id === pid)!;
     const key = providerKeys[pid] || '';
-    if (!key) { alert(`Isi API Key ${pdef.name} terlebih dahulu.`); return; }
+    console.debug(`[CENNA:handleTestAI] Menguji provider: ${pid}, model default: ${pdef.defaultModel}`);
+    if (!key) {
+      console.warn(`[CENNA:handleTestAI] ⚠️ API Key ${pdef.name} kosong — test dibatalkan.`);
+      alert(`Isi API Key ${pdef.name} terlebih dahulu.`);
+      return;
+    }
     setAiTestStatus(prev => ({ ...prev, [pid]: 'testing' }));
     try {
-      // Gunakan prompt lebih panjang & jelas agar tidak dipotong
+      console.debug(`[CENNA:handleTestAI] Memanggil ${pdef.name}...`);
       const result = await pdef.callFn(
         key,
         pdef.defaultModel,
         'Kamu adalah asisten klinis CENNA AI. Jawab singkat sesuai instruksi.',
         'Balas dengan tepat teks ini tanpa perubahan: CENNA-CONNECTED',
         0.1,
-        50, // minimal 50 token agar tidak terpotong
+        50,
       );
+      console.debug(`[CENNA:handleTestAI] Respons dari ${pdef.name}:`, result);
       if (result && result.length > 0) {
         setAiTestStatus(prev => ({ ...prev, [pid]: 'ok' }));
         alert(`✅ ${pdef.name} terhubung!\nResponse: "${result.trim().substring(0, 80)}"`);
@@ -570,12 +642,14 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         throw new Error('Respons kosong dari provider');
       }
     } catch (e: any) {
+      console.error(`[CENNA:handleTestAI] ❌ Error dari ${pdef.name}:`, e.message);
       setAiTestStatus(prev => ({ ...prev, [pid]: 'error' }));
       alert(`❌ Koneksi ${pdef.name} gagal:\n${e.message}`);
     }
   };
 
   const handleSaveSTT = async () => {
+    console.debug('[CENNA:handleSaveSTT] Menyimpan konfigurasi STT/TTS...', { sttProvider, sttLang, ttsPrefProvider });
     try {
       await sbSetSetting('api_stt_config', {
         provider: sttProvider,
@@ -584,42 +658,45 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
         keyConfigured: !!sttKey.trim(),
         updatedAt: new Date().toISOString(),
       });
-      // ElevenLabs
+      console.debug('[CENNA:handleSaveSTT] ✅ api_stt_config tersimpan.');
       await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
       await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
       await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
-      // Google TTS
+      console.debug('[CENNA:handleSaveSTT] ✅ ElevenLabs config tersimpan. Voice:', elevenVoiceId, 'Speed:', elevenSpeed);
       await sbSetSetting('GOOGLE_TTS_KEY', googleTtsKey.trim());
       await sbSetSetting('GOOGLE_TTS_VOICE', googleTtsVoice);
       await sbSetSetting('GOOGLE_TTS_RATE', googleTtsRate);
-      // OpenAI TTS
       await sbSetSetting('OPENAI_TTS_KEY', openaiTtsKey.trim());
       await sbSetSetting('OPENAI_TTS_VOICE', openaiTtsVoice);
       await sbSetSetting('OPENAI_TTS_MODEL', openaiTtsModel);
-      // Azure TTS
       await sbSetSetting('AZURE_TTS_KEY', azureTtsKey.trim());
       await sbSetSetting('AZURE_TTS_REGION', azureTtsRegion);
       await sbSetSetting('AZURE_TTS_VOICE', azureTtsVoice);
       await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
-      // Preferred TTS provider
       await sbSetSetting('tts_provider', ttsPrefProvider);
+      await sbSetSetting('tts_preview_text', ttsPreviewText.trim());
+      console.debug('[CENNA:handleSaveSTT] ✅ Semua TTS config tersimpan. Provider utama:', ttsPrefProvider);
       await sbAddLog('success', 'SYSTEM', `STT/TTS config updated. TTS utama: ${ttsPrefProvider}.`);
       alert('✅ Konfigurasi Speech/TTS berhasil disimpan ke database!');
     } catch (e: any) {
-      console.error('[handleSaveSTT] Error:', e);
+      console.error('[CENNA:handleSaveSTT] ❌ Error:', e);
       alert(`❌ Gagal menyimpan STT config!\n\n${e.message}`);
     }
   };
 
   const handleClearDbConfig = async () => {
+    console.debug('[CENNA:handleClearDbConfig] Konfirmasi hapus konfigurasi Supabase...');
     if (confirm('Hapus seluruh konfigurasi Supabase tersimpan?')) {
+      console.warn('[CENNA:handleClearDbConfig] ⚠️ Menghapus supabase_bootstrap dari DB...');
       await sbSetSetting('supabase_bootstrap', null);
-      // Bersihkan localStorage lama juga
       localStorage.removeItem('SUPABASE_URL');
       localStorage.removeItem('SUPABASE_ANON_KEY');
       localStorage.removeItem('SUPABASE_REF');
       setSupabaseUrl(''); setSupabaseAnonKey(''); setSupabaseRef('');
       setDbStatus('disconnected');
+      console.debug('[CENNA:handleClearDbConfig] ✅ Konfigurasi Supabase dihapus.');
+    } else {
+      console.debug('[CENNA:handleClearDbConfig] Dibatalkan oleh user.');
     }
   };
 
@@ -947,6 +1024,20 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               </div>
             </div>
 
+            {/* Preview Text — dikonfigurasi admin */}
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Teks Kalimat Preview</label>
+              <input
+                id="api-tts-preview-text"
+                type="text"
+                value={ttsPreviewText}
+                onChange={e => setTtsPreviewText(e.target.value)}
+                placeholder="Contoh: Halo dokter, ada yang bisa Cenna bantu?"
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+              />
+              <p className="text-[9px] text-slate-400">Kalimat yang diputar saat tombol Preview ditekan. Simpan via tombol di bawah.</p>
+            </div>
+
             {/* Preview Button */}
             <button
               disabled={!elevenLabsKey || elevenPreview === 'loading'}
@@ -960,7 +1051,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json', 'xi-api-key': elevenLabsKey },
                       body: JSON.stringify({
-                        text: 'Halo dokter, ada yang bisa Cenna bantu?',
+                        text: ttsPreviewText.trim() || 'Halo, ada yang bisa saya bantu?',
                         model_id: 'eleven_multilingual_v2',
                         voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.20, use_speaker_boost: true, speed: elevenSpeed },
                       }),

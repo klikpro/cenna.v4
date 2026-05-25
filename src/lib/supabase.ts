@@ -7,10 +7,11 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AuditLogEntry, CennaSession } from '../types';
 
 // ── Env-var based config (Vite exposes VITE_* at build time) ──────────────────
-const ENV_URL  = import.meta.env.VITE_SUPABASE_URL  as string | undefined;
-const ENV_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const _env = (import.meta as unknown as { env: Record<string, string> }).env;
+const ENV_URL  = _env.VITE_SUPABASE_URL  as string | undefined;
+const ENV_ANON = _env.VITE_SUPABASE_ANON_KEY as string | undefined;
 // Service-role key lives ONLY in env vars — never hardcoded, never in localStorage
-export const ENV_SERVICE_ROLE = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string | undefined;
+export const ENV_SERVICE_ROLE = _env.VITE_SUPABASE_SERVICE_ROLE_KEY as string | undefined;
 
 let _client: SupabaseClient | null = null;
 

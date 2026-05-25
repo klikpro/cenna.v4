@@ -43,6 +43,15 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   // 5. Orb visual model
   const [orbVisualModel, setOrbVisualModel] = useState<'classic' | 'aurora' | 'pulse' | 'wave'>('classic');
 
+  // 6. Landing page config
+  const [landingAppName,       setLandingAppName]       = useState('CENNA AI');
+  const [landingTagline,       setLandingTagline]       = useState('Ambient Clinical Intelligence');
+  const [landingLogoUrl,       setLandingLogoUrl]       = useState('');
+  const [landingGreeting,      setLandingGreeting]      = useState('Halo dokter, ada yang bisa saya bantu?');
+  const [landingShowLogin,     setLandingShowLogin]     = useState(true);
+  const [landingLogoSaving,    setLandingLogoSaving]    = useState(false);
+  const landingLogoInputRef = React.useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     async function loadSettings() {
       const p = await sbGetSetting<PlatformSettings>('platform');
@@ -63,6 +72,16 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       }
       const orbModel = await sbGetSetting<string>('orb_visual_model');
       if (orbModel) setOrbVisualModel(orbModel as 'classic' | 'aurora' | 'pulse' | 'wave');
+
+      // Landing config
+      const lc = await sbGetSetting<{ appName?: string; tagline?: string; logoUrl?: string; wakeGreeting?: string; showLoginButton?: boolean }>('landing_config');
+      if (lc) {
+        if (lc.appName)       setLandingAppName(lc.appName);
+        if (lc.tagline)       setLandingTagline(lc.tagline);
+        if (lc.logoUrl)       setLandingLogoUrl(lc.logoUrl);
+        if (lc.wakeGreeting)  setLandingGreeting(lc.wakeGreeting);
+        if (typeof lc.showLoginButton === 'boolean') setLandingShowLogin(lc.showLoginButton);
+      }
       const session = sessionStorage.getItem('cenna_admin');
       if (session) {
         try { setAdminName(JSON.parse(session).name || ''); } catch (e) {}
@@ -545,6 +564,139 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
               className="w-full py-2.5 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer"
             >
               💾 Simpan Model Orb
+            </button>
+          </div>
+
+          {/* Card: Landing Page Config */}
+          <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-5 shadow-sm space-y-4">
+            <div>
+              <h3 className="font-bold text-sm text-[#1e2a4a]">🖥️ Konfigurasi Landing Page</h3>
+              <p className="text-[11px] text-[#1e2a4a]/40 mt-0.5">Tampilan dan perilaku halaman utama voice assistant CENNA.</p>
+            </div>
+
+            {/* Logo URL */}
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Logo URL (Hosting)</label>
+              <input
+                id="landing-logo-url"
+                type="url"
+                value={landingLogoUrl}
+                onChange={(e) => setLandingLogoUrl(e.target.value)}
+                placeholder="https://cdn.klinik.com/logo.png"
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+              />
+              <p className="text-[9px] text-slate-400">Atau upload file (maks 512 KB):</p>
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={() => landingLogoInputRef.current?.click()}
+                  disabled={landingLogoSaving}
+                  className="px-3 py-1.5 text-[10px] font-bold text-[#1e2a4a] border border-[#1e2a4a]/20 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer disabled:opacity-50"
+                >
+                  {landingLogoSaving ? 'Memproses…' : '🖼️ Upload File'}
+                </button>
+                {landingLogoUrl && (
+                  <>
+                    <img src={landingLogoUrl} alt="preview" className="h-8 w-auto object-contain max-w-[80px] border border-slate-200 rounded" />
+                    <button onClick={() => setLandingLogoUrl('')} className="text-[10px] text-red-500 hover:underline cursor-pointer bg-transparent border-none">Hapus</button>
+                  </>
+                )}
+              </div>
+              <input
+                ref={landingLogoInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 512 * 1024) { alert('Ukuran logo maks 512 KB.'); return; }
+                  setLandingLogoSaving(true);
+                  const reader = new FileReader();
+                  reader.onload = (ev) => { setLandingLogoUrl(ev.target?.result as string); setLandingLogoSaving(false); };
+                  reader.readAsDataURL(file);
+                }}
+              />
+            </div>
+
+            {/* App name */}
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Nama AI di Wordmark</label>
+              <input
+                id="landing-app-name"
+                type="text"
+                value={landingAppName}
+                onChange={(e) => setLandingAppName(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+              />
+            </div>
+
+            {/* Tagline */}
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Tagline di Wordmark</label>
+              <input
+                id="landing-tagline"
+                type="text"
+                value={landingTagline}
+                onChange={(e) => setLandingTagline(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+              />
+            </div>
+
+            {/* Sapaan wake word */}
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Sapaan Setelah Wake Word</label>
+              <input
+                id="landing-greeting"
+                type="text"
+                value={landingGreeting}
+                onChange={(e) => setLandingGreeting(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+              />
+              <p className="text-[9px] text-slate-400">Teks yang diucapkan CENNA saat pertama kali dipanggil.</p>
+            </div>
+
+            {/* Show login button */}
+            <div className="flex items-center justify-between py-2 border-t border-slate-100">
+              <div>
+                <p className="text-xs font-semibold text-[#1e2a4a]">Tampilkan Tombol "Admin →"</p>
+                <p className="text-[10px] text-slate-400">Nonaktifkan untuk produksi agar pasien tidak klik ke admin.</p>
+              </div>
+              <button
+                id="landing-show-login-toggle"
+                onClick={() => setLandingShowLogin(v => !v)}
+                className={`relative w-11 h-6 rounded-full transition-colors ${landingShowLogin ? 'bg-[#1e2a4a]' : 'bg-slate-200'}`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${landingShowLogin ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+
+            <button
+              id="btn-save-landing-config"
+              onClick={async () => {
+                console.debug('[CENNA:Settings] Menyimpan landing_config...');
+                try {
+                  await sbSetSetting('landing_config', {
+                    appName:         landingAppName.trim(),
+                    tagline:         landingTagline.trim(),
+                    logoUrl:         landingLogoUrl.trim(),
+                    wakeGreeting:    landingGreeting.trim(),
+                    showLoginButton: landingShowLogin,
+                    updatedAt:       new Date().toISOString(),
+                  });
+                  // Sync juga ke branding agar wordmark konsisten
+                  const currentBranding = await sbGetSetting<Record<string, unknown>>('branding') || {};
+                  await sbSetSetting('branding', { ...currentBranding, logoUrl: landingLogoUrl.trim(), brand: landingAppName.trim(), tagline: landingTagline.trim() });
+                  await sbAddLog('success', 'SYSTEM', `Landing page config updated. AppName: ${landingAppName}`);
+                  console.debug('[CENNA:Settings] ✅ landing_config tersimpan.');
+                  alert('✅ Konfigurasi landing page berhasil disimpan!');
+                } catch (e: any) {
+                  console.error('[CENNA:Settings] ❌ Error save landing_config:', e);
+                  alert(`❌ Gagal menyimpan: ${e.message}`);
+                }
+              }}
+              className="w-full py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+            >
+              💾 Simpan Konfigurasi Landing Page
             </button>
           </div>
 
