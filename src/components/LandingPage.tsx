@@ -536,22 +536,39 @@ function speakBrowser(text: string, onEnd: () => void): void {
  * speak() — entry point utama.
  * Coba provider sesuai urutan prioritas, fallback otomatis jika gagal.
  */
+
+// Flag global: true selama TTS sedang memutar suara.
+// Digunakan oleh ambient listener untuk mengabaikan input saat Cenna berbicara.
+let _isSpeaking = false;
+export function isTtsSpeaking() { return _isSpeaking; }
+
 async function speak(text: string, onEnd: () => void): Promise<void> {
+  _isSpeaking = true;
   const preferredProvider = (await sbGetSetting<string>('tts_provider')) || 'elevenlabs';
+
+  // Wrap onEnd agar _isSpeaking di-reset + tambahkan buffer 500ms
+  // setelah TTS selesai sebelum mic kembali aktif
+  const safeOnEnd = () => {
+    setTimeout(() => {
+      _isSpeaking = false;
+      console.log('[TTS] selesai — mic kembali aktif');
+      onEnd();
+    }, 500); // 500ms buffer agar reverb TTS tidak ter-capture
+  };
 
   const tryProviders = async (order: string[]): Promise<void> => {
     for (const p of order) {
       let ok = false;
-      if (p === 'elevenlabs') ok = await speakElevenLabs(text, onEnd);
-      else if (p === 'google') ok = await speakGoogle(text, onEnd);
-      else if (p === 'openai') ok = await speakOpenAI(text, onEnd);
-      else if (p === 'azure')  ok = await speakAzure(text, onEnd);
-      else if (p === 'browser') { speakBrowser(text, onEnd); return; }
+      if (p === 'elevenlabs') ok = await speakElevenLabs(text, safeOnEnd);
+      else if (p === 'google') ok = await speakGoogle(text, safeOnEnd);
+      else if (p === 'openai') ok = await speakOpenAI(text, safeOnEnd);
+      else if (p === 'azure')  ok = await speakAzure(text, safeOnEnd);
+      else if (p === 'browser') { speakBrowser(text, safeOnEnd); return; }
       if (ok) { console.log(`[TTS] playing via ${p}`); return; }
       console.warn(`[TTS] ${p} failed, trying next...`);
     }
     // Semua API gagal — paksa browser
-    speakBrowser(text, onEnd);
+    speakBrowser(text, safeOnEnd);
   };
 
   // Susun urutan: preferred dulu, lalu sisanya, browser selalu terakhir
@@ -817,6 +834,12 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
 
     rec.onresult = (evt: SpeechRecognitionEvent) => {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+      // Abaikan jika Cenna sedang berbicara (TTS) — cegah feedback loop
+      if (_isSpeaking) {
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        return;
+      }
 
       let newText = '';
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
@@ -1109,6 +1132,12 @@ function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: Ambient
 
         const tick = () => {
           if (destroyedRef.current || !enabledRef.current) return;
+
+          // Abaikan seluruh VAD jika Cenna sedang berbicara — cegah feedback TTS
+          if (_isSpeaking) {
+            animFrameRef.current = requestAnimationFrame(tick);
+            return;
+          }
 
           analyser.getByteTimeDomainData(timeDom);
           // Hitung RMS (0–100)
