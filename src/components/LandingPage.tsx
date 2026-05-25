@@ -538,33 +538,35 @@ async function speak(text: string, onEnd: () => void): Promise<void> {
 }
 
 // ─── Global mic-track registry ───────────────────────────────────────────────
-// Setiap track yang diperoleh lewat getUserMedia didaftarkan di sini.
-// emergencyStopAllMic() memanggil stop() pada semua track — melepas mic di browser.
-const _globalMicTracks = new Set<MediaStreamTrack>();
+const _globalMicTracks   = new Set<MediaStreamTrack>();
+const _globalSpeechRecs  = new Set<SpeechRecognition>();
+const _globalAudioCtxs   = new Set<AudioContext>();    // untuk mobile hook
+const _globalRecorders   = new Set<MediaRecorder>();   // untuk mobile hook
 
-// ─── Global SpeechRecognition registry ───────────────────────────────────────
-// Setiap instance SpeechRecognition yang aktif didaftarkan di sini.
-// emergencyStopAllMic() memanggil abort() pada semua instance — menghentikan STT.
-const _globalSpeechRecs = new Set<SpeechRecognition>();
-
-/** Hentikan SEMUA track mikrofon DAN SpeechRecognition secara paksa */
+/** Hentikan SEMUA sumber audio secara paksa (dipanggil saat berpindah dari landing page) */
 export function emergencyStopAllMic(): void {
-  // 1. Hentikan semua MediaStream track (indikator mic di browser)
-  _globalMicTracks.forEach(track => {
-    try { track.stop(); } catch { /* ignore */ }
-  });
+  // 1. Stop semua MediaStream track
+  _globalMicTracks.forEach(t => { try { t.stop(); } catch { /* ignore */ } });
   _globalMicTracks.clear();
 
-  // 2. Hentikan semua SpeechRecognition instance yang aktif (bug utama: ini yang sebelumnya tidak dilakukan)
-  _globalSpeechRecs.forEach(rec => {
-    try { rec.abort(); } catch { /* ignore */ }
-  });
+  // 2. Abort semua SpeechRecognition
+  _globalSpeechRecs.forEach(r => { try { r.abort(); } catch { /* ignore */ } });
   _globalSpeechRecs.clear();
 
-  // 3. Hentikan TTS juga agar tidak ada suara tersisa
+  // 3. Stop semua MediaRecorder (mobile STT)
+  _globalRecorders.forEach(r => {
+    try { if (r.state !== 'inactive') r.stop(); } catch { /* ignore */ }
+  });
+  _globalRecorders.clear();
+
+  // 4. Close semua AudioContext (mobile VAD)
+  _globalAudioCtxs.forEach(ctx => { try { ctx.close(); } catch { /* ignore */ } });
+  _globalAudioCtxs.clear();
+
+  // 5. Cancel TTS
   try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
 
-  console.log('[Cenna] emergencyStopAllMic — semua mic track + SpeechRecognition dihentikan');
+  console.log('[Cenna] emergencyStopAllMic — semua audio resource dihentikan');
 }
 
 
@@ -868,6 +870,278 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
       stop();
     };
   }, [enabled, start, stop]);
+}
+
+// ─── Hook: Mobile Ambient Listener (MediaRecorder + Whisper) ─────────────────
+//
+// Alternatif untuk mobile browser di mana SpeechRecognition continuous tidak
+// didukung. Pipeline:
+//   1. getUserMedia → AudioContext → AnalyserNode (VAD)
+//   2. Ketika RMS > threshold selama > 300ms → MediaRecorder mulai merekam
+//   3. Ketika diam selama > silenceMs → rekaman berhenti, kirim ke Whisper
+//   4. Transkrip dikembalikan via onData (interface sama dengan useAmbientListener)
+//
+// Whisper key priority: OPENAI_WHISPER_KEY → OPENAI_TTS_KEY → AI_KEY_OPENAI
+
+async function getWhisperApiKey(): Promise<string> {
+  const k1 = await sbGetSetting<string>('OPENAI_WHISPER_KEY');
+  if (k1?.trim()) return k1.trim();
+  const k2 = await sbGetSetting<string>('OPENAI_TTS_KEY');
+  if (k2?.trim()) return k2.trim();
+  const k3 = await sbGetSetting<string>('AI_KEY_OPENAI');
+  if (k3?.trim()) return k3.trim();
+  return '';
+}
+
+function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: AmbientListenerOptions) {
+  const enabledRef  = useRef(enabled);
+  const onDataRef   = useRef(onData);
+  enabledRef.current = enabled;
+  onDataRef.current  = onData;
+
+  const streamRef        = useRef<MediaStream | null>(null);
+  const audioCtxRef      = useRef<AudioContext | null>(null);
+  const recorderRef      = useRef<MediaRecorder | null>(null);
+  const chunksRef        = useRef<Blob[]>([]);
+  const animFrameRef     = useRef<number>(0);
+  const silenceTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce awal bicara
+  const isRecordingRef   = useRef(false);
+  const destroyedRef     = useRef(false);
+
+  // ── Kirim audio blob ke Whisper ──────────────────────────────────────────────
+  const sendToWhisper = useCallback(async (blob: Blob, mimeType: string) => {
+    if (blob.size < 2000) {
+      console.log('[Mobile STT] Blob terlalu kecil, skip:', blob.size, 'bytes');
+      return;
+    }
+    try {
+      const apiKey = await getWhisperApiKey();
+      if (!apiKey) {
+        console.warn('[Mobile STT] Tidak ada OpenAI API key untuk Whisper');
+        return;
+      }
+      const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+      const formData = new FormData();
+      formData.append('file', blob, `audio.${ext}`);
+      formData.append('model', 'whisper-1');
+      formData.append('language', 'id');
+
+      console.log('[Mobile STT] Mengirim ke Whisper:', blob.size, 'bytes, type:', mimeType);
+      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.warn('[Mobile STT] Whisper error', res.status, errText.slice(0, 100));
+        return;
+      }
+
+      const { text } = await res.json() as { text?: string };
+      if (!text?.trim()) return;
+
+      console.log('[Mobile STT] Whisper ✓ transcript:', text.trim().slice(0, 80));
+      const entities = extractEntities(text.trim());
+      onDataRef.current({
+        transcript:  text.trim(),
+        keluhan:     entities.keluhan,
+        obat:        entities.obat,
+        pertanyaan:  entities.pertanyaan,
+        waktu:       new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      });
+    } catch (e) {
+      console.warn('[Mobile STT] fetch error:', e);
+    }
+  }, []);
+
+  // ── Pilih MIME type yang didukung browser (iOS → mp4, Android → webm) ────────
+  const getSupportedMime = () => {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ];
+    return candidates.find(m => MediaRecorder.isTypeSupported(m)) ?? '';
+  };
+
+  // ── Stop recorder & kirim hasil ──────────────────────────────────────────────
+  const stopRecording = useCallback((mimeType: string) => {
+    const rec = recorderRef.current;
+    if (!rec || rec.state === 'inactive') return;
+    try {
+      rec.stop(); // ondataavailable + onstop akan dipanggil
+    } catch { /* ignore */ }
+    isRecordingRef.current = false;
+    console.log('[Mobile STT] Perekaman dihentikan');
+    // onstop di-handle di dalam startRecording untuk akses ke blob
+    void mimeType; // referenced below via closure
+  }, []);
+
+  // ── Mulai recorder ───────────────────────────────────────────────────────────
+  const startRecording = useCallback((stream: MediaStream) => {
+    if (isRecordingRef.current || destroyedRef.current) return;
+    const mimeType = getSupportedMime();
+    if (!mimeType) { console.warn('[Mobile STT] MediaRecorder: tidak ada MIME yang didukung'); return; }
+
+    chunksRef.current = [];
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType });
+    } catch (e) {
+      console.warn('[Mobile STT] MediaRecorder gagal dibuat:', e);
+      return;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      if (destroyedRef.current) return;
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      chunksRef.current = [];
+      sendToWhisper(blob, mimeType);
+    };
+
+    recorderRef.current = recorder;
+    isRecordingRef.current = true;
+    recorder.start(250); // ambil chunk tiap 250ms
+    console.log('[Mobile STT] 🔴 Mulai merekam, MIME:', mimeType);
+  }, [sendToWhisper]);
+
+  // ── Cleanup menyeluruh ───────────────────────────────────────────────────────
+  const cleanupAll = useCallback(() => {
+    destroyedRef.current = true;
+    cancelAnimationFrame(animFrameRef.current);
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (speechTimerRef.current)  { clearTimeout(speechTimerRef.current);  speechTimerRef.current  = null; }
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      rec.ondataavailable = null; // buang chunk terakhir — jangan kirim
+      rec.onstop = null;
+      try { rec.stop(); } catch { /* ignore */ }
+    }
+    recorderRef.current = null;
+    isRecordingRef.current = false;
+    chunksRef.current = [];
+    if (audioCtxRef.current) {
+      try { audioCtxRef.current.close(); } catch { /* ignore */ }
+      audioCtxRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => {
+        try { t.stop(); } catch { /* ignore */ }
+        _globalMicTracks.delete(t);
+      });
+      streamRef.current = null;
+    }
+    console.log('[Mobile STT] cleanup selesai');
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      enabledRef.current = false;
+      cleanupAll();
+      return;
+    }
+
+    destroyedRef.current = false;
+
+    // Threshold VAD (0–100): nilai di bawah ini dianggap hening
+    const SILENCE_THRESHOLD = 12;
+    // Durasi minimum suara sebelum mulai rekam (ms) — filter bunyi sesaat
+    const SPEECH_DEBOUNCE_MS = 280;
+
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 } })
+      .then(stream => {
+        if (destroyedRef.current) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        stream.getTracks().forEach(t => _globalMicTracks.add(t));
+
+        const audioCtx = new AudioContext({ sampleRate: 16000 });
+        audioCtxRef.current = audioCtx;
+        const source   = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.6;
+        source.connect(analyser);
+
+        const bufLen   = analyser.frequencyBinCount;
+        const timeDom  = new Uint8Array(bufLen);
+
+        let speechDetectedAt: number | null = null;
+
+        const tick = () => {
+          if (destroyedRef.current || !enabledRef.current) return;
+
+          analyser.getByteTimeDomainData(timeDom);
+          // Hitung RMS (0–100)
+          let sum = 0;
+          for (let i = 0; i < bufLen; i++) {
+            const v = (timeDom[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / bufLen) * 100;
+          const isSpeaking = rms > SILENCE_THRESHOLD;
+
+          if (isSpeaking) {
+            // ─ Ada suara ─────────────────────────────────────────────────────
+            if (silenceTimerRef.current) {
+              clearTimeout(silenceTimerRef.current);
+              silenceTimerRef.current = null;
+            }
+
+            if (!isRecordingRef.current && speechDetectedAt === null) {
+              // Mulai debounce: pastikan suara bertahan > SPEECH_DEBOUNCE_MS
+              speechDetectedAt = Date.now();
+              speechTimerRef.current = setTimeout(() => {
+                if (!destroyedRef.current && enabledRef.current) {
+                  startRecording(stream);
+                }
+              }, SPEECH_DEBOUNCE_MS);
+            }
+          } else {
+            // ─ Hening ────────────────────────────────────────────────────────
+            if (speechDetectedAt !== null && !isRecordingRef.current) {
+              // Suara tidak cukup lama → batal debounce
+              if (speechTimerRef.current) { clearTimeout(speechTimerRef.current); speechTimerRef.current = null; }
+              speechDetectedAt = null;
+            }
+
+            if (isRecordingRef.current && !silenceTimerRef.current) {
+              // Rekaman sedang jalan, jadwalkan stop saat diam
+              silenceTimerRef.current = setTimeout(() => {
+                speechDetectedAt = null;
+                if (isRecordingRef.current && recorderRef.current) {
+                  stopRecording(recorderRef.current.mimeType);
+                }
+                silenceTimerRef.current = null;
+              }, silenceMs);
+            }
+          }
+
+          animFrameRef.current = requestAnimationFrame(tick);
+        };
+
+        animFrameRef.current = requestAnimationFrame(tick);
+        console.log('[Mobile STT] VAD aktif 🎙️');
+      })
+      .catch(err => {
+        console.warn('[Mobile STT] mic denied:', err);
+      });
+
+    return () => {
+      enabledRef.current = false;
+      cleanupAll();
+    };
+  }, [enabled, silenceMs, startRecording, stopRecording, cleanupAll]);
 }
 
 // ─── Helper: hex → {r,g,b} ────────────────────────────────────────────────────
@@ -1817,11 +2091,18 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     }
   }, [aiEnabled]);
 
-  // Ambient listener aktif saat listening SAJA — tidak saat processing/responding
-  // untuk mencegah double-fire saat AI sedang memproses
+  // Ambient listener: dua hook selalu dipanggil (Rules of Hooks), hanya satu yang aktif.
+  // Desktop → SpeechRecognition (latensi rendah, tidak perlu API key)
+  // Mobile  → MediaRecorder + OpenAI Whisper (lebih stabil di Chrome Android / iOS Safari)
   useAmbientListener({
-    enabled:   phase === 'listening',
+    enabled:   phase === 'listening' && !isMobile,
     silenceMs: 3000,
+    onData:    handleAmbientData,
+  });
+
+  useMobileAmbientListener({
+    enabled:   phase === 'listening' && isMobile,
+    silenceMs: 2500,
     onData:    handleAmbientData,
   });
 
