@@ -5,7 +5,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient, sbSetSetting, sbGetSetting, sbAddLog } from '../lib/supabase';
-import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './LandingPage';
+import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './landing/tts-engine';
+
 
 interface ApiSettingsProps {
   onSettingsSaved: () => void;

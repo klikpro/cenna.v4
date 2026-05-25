@@ -23,11 +23,9 @@ import { useWakeWord, useAmbientListener, useMobileAmbientListener, emergencySto
 import { OrbCore, useOrbCanvas, StatusPill, type OrbPhase, type OrbVisualModel } from './landing/orb-canvas';
 import { ConclusionPopup, DataPopup } from './landing/session-popup';
 
-// ─── Re-exports untuk backward-compatibility (ApiSettings.tsx & App.tsx masih import dari sini)
+// ─── Re-exports untuk backward-compatibility (App.tsx masih import dari sini)
 export { emergencyStopAllMic } from './landing/stt-hooks';
-export {
-  ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES, AZURE_TTS_VOICES,
-} from './landing/tts-engine';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface LandingPageProps { onLoginClick: () => void; }

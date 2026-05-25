@@ -13,12 +13,13 @@ interface SettingsProps {
 
 export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   // 1. Platform states
-  const [platformName, setPlatformName] = useState('CENNA AI');
-  const [platformOrg, setPlatformOrg] = useState('Klinik Sehat Mandiri');
-  const [platformEmail, setPlatformEmail] = useState('admin@cennaai.id');
-  const [platformPhone, setPlatformPhone] = useState('+6221-555-8848');
-  const [platformTz, setPlatformTz] = useState('Asia/Jakarta');
-  const [platformAddress, setPlatformAddress] = useState('Jl. Jenderal Sudirman No. 42, Jakarta Selatan');
+  const [platformName,    setPlatformName]    = useState('');
+  const [platformOrg,     setPlatformOrg]     = useState('');
+  const [platformEmail,   setPlatformEmail]   = useState('');
+  const [platformPhone,   setPlatformPhone]   = useState('');
+  const [platformTz,      setPlatformTz]      = useState('Asia/Jakarta');
+  const [platformAddress, setPlatformAddress] = useState('');
+
 
   // 2. Profile states
   const [adminName, setAdminName] = useState('');
