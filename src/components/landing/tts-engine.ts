@@ -7,6 +7,25 @@
 
 import { sbGetSetting } from '../../lib/supabase';
 
+// ─── BUG-M6 FIX: In-memory settings cache dengan TTL 5 menit ─────────────────
+// Mengurangi DB calls dari 20+ per sesi menjadi 1x per 5 menit per key
+const _settingsCache = new Map<string, { value: unknown; ts: number }>();
+const _CACHE_TTL = 5 * 60 * 1000; // 5 menit
+
+async function getCached<T>(key: string): Promise<T | null> {
+  const cached = _settingsCache.get(key);
+  if (cached && Date.now() - cached.ts < _CACHE_TTL) return cached.value as T;
+  const value = await sbGetSetting<T>(key);
+  _settingsCache.set(key, { value, ts: Date.now() });
+  return value;
+}
+
+/** Invalidasi cache TTS — dipanggil setelah admin simpan config */
+export function invalidateTtsCache(): void {
+  _settingsCache.clear();
+  console.debug('[TTS] Settings cache cleared');
+}
+
 // ─── TTS Constants (di-export untuk backward compat dengan ApiSettings.tsx) ──
 export const TTS_PROVIDERS = [
   { id: 'elevenlabs', label: 'ElevenLabs (Rekomendasi)' },
@@ -77,12 +96,12 @@ function getBrowserVoiceID(): SpeechSynthesisVoice | null {
 export async function speakElevenLabs(text: string, onEnd: () => void): Promise<boolean> {
   const apiKey =
     ((import.meta as unknown as { env: Record<string, string> }).env.VITE_ELEVENLABS_API_KEY) ||
-    (await sbGetSetting<string>('ELEVENLABS_API_KEY')) || '';
+    (await getCached<string>('ELEVENLABS_API_KEY')) || '';
   if (!apiKey) return false;
 
-  const voiceId = (await sbGetSetting<string>('ELEVEN_VOICE_ID')) || '';
+  const voiceId = (await getCached<string>('ELEVEN_VOICE_ID')) || '';
   if (!voiceId) { console.warn('[TTS:EL] ELEVEN_VOICE_ID belum dikonfigurasi'); return false; }
-  const speed = (await sbGetSetting<number>('ELEVEN_SPEED')) ?? 1.0;
+  const speed = (await getCached<number>('ELEVEN_SPEED')) ?? 1.0;
 
   try {
     const res = await fetch(
@@ -102,18 +121,19 @@ export async function speakElevenLabs(text: string, onEnd: () => void): Promise<
     const audio = new Audio(url);
     audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
     audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
-    await audio.play();
+    // BUG-M1 FIX: wrap play() agar tidak stuck jika mobile autoplay policy menolak
+    try { await audio.play(); } catch (playErr) { console.warn('[TTS:EL] play() rejected:', playErr); URL.revokeObjectURL(url); onEnd(); return false; }
     return true;
   } catch (e) { console.warn('[TTS:EL] fetch error:', e); return false; }
 }
 
 // ─── Google Cloud TTS ─────────────────────────────────────────────────────────
 export async function speakGoogle(text: string, onEnd: () => void): Promise<boolean> {
-  const apiKey = (await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '';
+  const apiKey = (await getCached<string>('GOOGLE_TTS_KEY')) || '';
   if (!apiKey) return false;
 
-  const voiceName    = (await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || '';
-  const speakingRate = (await sbGetSetting<number>('GOOGLE_TTS_RATE')) ?? 1.0;
+  const voiceName    = (await getCached<string>('GOOGLE_TTS_VOICE')) || '';
+  const speakingRate = (await getCached<number>('GOOGLE_TTS_RATE')) ?? 1.0;
 
   try {
     const res = await fetch(
@@ -132,20 +152,21 @@ export async function speakGoogle(text: string, onEnd: () => void): Promise<bool
     const { audioContent } = await res.json();
     if (!audioContent) return false;
     const audio = new Audio(`data:audio/mp3;base64,${audioContent}`);
+    // BUG-M1 FIX: wrap play()
+    try { await audio.play(); } catch (e) { console.warn('[TTS:GCP] play() rejected:', e); onEnd(); return false; }
     audio.onended = onEnd;
     audio.onerror = () => onEnd();
-    await audio.play();
     return true;
   } catch (e) { console.warn('[TTS:GCP] error:', e); return false; }
 }
 
 // ─── OpenAI TTS ───────────────────────────────────────────────────────────────
 export async function speakOpenAI(text: string, onEnd: () => void): Promise<boolean> {
-  const apiKey = (await sbGetSetting<string>('OPENAI_TTS_KEY')) || '';
+  const apiKey = (await getCached<string>('OPENAI_TTS_KEY')) || '';
   if (!apiKey) return false;
 
-  const voice = (await sbGetSetting<string>('OPENAI_TTS_VOICE')) || 'shimmer';
-  const model = (await sbGetSetting<string>('OPENAI_TTS_MODEL')) || 'tts-1';
+  const voice = (await getCached<string>('OPENAI_TTS_VOICE')) || 'shimmer';
+  const model = (await getCached<string>('OPENAI_TTS_MODEL')) || 'tts-1';
 
   try {
     const res = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -158,19 +179,20 @@ export async function speakOpenAI(text: string, onEnd: () => void): Promise<bool
     const audio = new Audio(url);
     audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
     audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
-    await audio.play();
+    // BUG-M1 FIX: wrap play()
+    try { await audio.play(); } catch (e) { console.warn('[TTS:OAI] play() rejected:', e); URL.revokeObjectURL(url); onEnd(); return false; }
     return true;
   } catch (e) { console.warn('[TTS:OAI] error:', e); return false; }
 }
 
 // ─── Microsoft Azure TTS ──────────────────────────────────────────────────────
 export async function speakAzure(text: string, onEnd: () => void): Promise<boolean> {
-  const subscriptionKey = (await sbGetSetting<string>('AZURE_TTS_KEY')) || '';
-  const region          = (await sbGetSetting<string>('AZURE_TTS_REGION')) || 'southeastasia';
+  const subscriptionKey = (await getCached<string>('AZURE_TTS_KEY')) || '';
+  const region          = (await getCached<string>('AZURE_TTS_REGION')) || 'southeastasia';
   if (!subscriptionKey) return false;
 
-  const voiceName    = (await sbGetSetting<string>('AZURE_TTS_VOICE'))  || 'id-ID-GadisNeural';
-  const speakingRate = (await sbGetSetting<number>('AZURE_TTS_RATE')) ?? 1.0;
+  const voiceName    = (await getCached<string>('AZURE_TTS_VOICE'))  || 'id-ID-GadisNeural';
+  const speakingRate = (await getCached<number>('AZURE_TTS_RATE')) ?? 1.0;
   const ratePercent  = Math.round((speakingRate - 1) * 100);
   const rateStr      = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`;
 
@@ -198,7 +220,8 @@ export async function speakAzure(text: string, onEnd: () => void): Promise<boole
     const audio = new Audio(url);
     audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
     audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
-    await audio.play();
+    // BUG-M1 FIX: wrap play()
+    try { await audio.play(); } catch (e) { console.warn('[TTS:AZ] play() rejected:', e); URL.revokeObjectURL(url); onEnd(); return false; }
     return true;
   } catch (e) { console.warn('[TTS:AZ] error:', e); return false; }
 }
@@ -225,7 +248,7 @@ export function speakBrowser(text: string, onEnd: () => void): void {
 // ─── speak() — entry point utama ─────────────────────────────────────────────
 export async function speak(text: string, onEnd: () => void): Promise<void> {
   _isSpeaking = true;
-  const preferredProvider = (await sbGetSetting<string>('tts_provider')) || 'elevenlabs';
+  const preferredProvider = (await getCached<string>('tts_provider')) || 'elevenlabs';
 
   const safeOnEnd = () => {
     setTimeout(() => {
@@ -251,5 +274,15 @@ export async function speak(text: string, onEnd: () => void): Promise<void> {
 
   const fallbackOrder = ['elevenlabs', 'google', 'openai', 'azure']
     .filter(p => p !== preferredProvider);
-  await tryProviders([preferredProvider, ...fallbackOrder, 'browser']);
+
+  // BUG-C2 FIX: Safety net — pastikan _isSpeaking SELALU di-reset ke false
+  // Sebelumnya: jika getCached/tryProviders throw, _isSpeaking stuck = true selamanya
+  try {
+    await tryProviders([preferredProvider, ...fallbackOrder, 'browser']);
+  } catch (e) {
+    console.error('[TTS] ❌ Unexpected error in speak():', e);
+    _isSpeaking = false;
+    try { onEnd(); } catch { /* prevent error cascade */ }
+  }
 }
+

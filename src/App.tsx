@@ -115,14 +115,18 @@ export default function App() {
   }
 
   // ─ Admin layout ───────────────────────────────────────────────────────────
+  // BUG-N8 FIX: strip semua gelar medis Indonesia (Prof., Dr., Sp.X, M.Kes, dll)
+  // Sebelumnya hanya hapus 'dr.' di awal — salah untuk 'Prof. Dr. Suharto Sp.PD'
   const avatarInitials = adminSession?.name
     ? adminSession.name
-        .replace(/^dr\.\s*/i, '')
-        .split(' ')
+        .replace(/\b(prof|dr|drs|ir|h|hj|sp[a-z.]*|m\.?kes|m\.?sc|m\.?m|phd|s\.?ked|s\.?kep|amd)\b\.?\s*/gi, '')
+        .trim()
+        .split(/\s+/)
+        .filter((w: string) => w.length > 0)
         .map((w: string) => w[0])
         .join('')
         .substring(0, 2)
-        .toUpperCase()
+        .toUpperCase() || 'AD'
     : 'AD';
 
   const PAGE_TITLE: Record<ActivePage, string> = {

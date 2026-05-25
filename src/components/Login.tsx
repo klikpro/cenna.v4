@@ -90,7 +90,7 @@ export default function Login({ onLoginSuccess, onBackClick }: LoginProps) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@cennaai.id"
+                placeholder="admin@klinik.com"
                 className="w-full px-4 py-3 bg-[#ede6d6]/60 border border-[#1e2a4a]/15 rounded-xl text-xs text-[#111827] placeholder-[#1e2a4a]/30 focus:border-[#1e2a4a] focus:bg-white outline-none transition"
               />
             </div>

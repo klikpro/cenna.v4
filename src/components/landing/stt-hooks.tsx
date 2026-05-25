@@ -161,8 +161,11 @@ export function useAmbientListener({ enabled, silenceMs = 3000, onData }: Ambien
   const transcriptRef   = useRef('');
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ambientStreamRef = useRef<MediaStream | null>(null);
-  const enabledRef = useRef(enabled); const onDataRef = useRef(onData);
+  const enabledRef  = useRef(enabled); const onDataRef = useRef(onData);
   enabledRef.current = enabled; onDataRef.current = onData;
+  // BUG-H5 FIX: destroyedRef mencegah race condition restart setelah cleanup
+  // Tanpa ini: rec.onend bisa restart mic setelah enabled=false karena async timing
+  const destroyedRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
 
   const fireSilence = useCallback(() => {
@@ -200,23 +203,30 @@ export function useAmbientListener({ enabled, silenceMs = 3000, onData }: Ambien
       if (last.trim().toLowerCase().endsWith('?') && last.length > 5) { fireSilence(); return; }
       silenceTimerRef.current = setTimeout(fireSilence, silenceMs);
     };
-    rec.onend  = () => { _globalSpeechRecs.delete(rec); runningRef.current = false; recRef.current = null; if (enabledRef.current) setTimeout(start, 150); };
-    rec.onerror = (e: SpeechRecognitionErrorEvent) => { _globalSpeechRecs.delete(rec); if (e.error === 'not-allowed') { stopRef.current(); return; } runningRef.current = false; recRef.current = null; if (enabledRef.current) setTimeout(start, 800); };
+    // BUG-H5 FIX: periksa destroyedRef agar tidak restart jika effect sudah di-cleanup
+    rec.onend  = () => { _globalSpeechRecs.delete(rec); runningRef.current = false; recRef.current = null; if (enabledRef.current && !destroyedRef.current) setTimeout(start, 150); };
+    rec.onerror = (e: SpeechRecognitionErrorEvent) => { _globalSpeechRecs.delete(rec); if (e.error === 'not-allowed') { stopRef.current(); return; } runningRef.current = false; recRef.current = null; if (enabledRef.current && !destroyedRef.current) setTimeout(start, 800); };
     recRef.current = rec; _globalSpeechRecs.add(rec);
-    try { rec.start(); } catch { _globalSpeechRecs.delete(rec); recRef.current = null; setTimeout(start, 800); }
+    // BUG-N7 FIX: periksa destroyedRef sebelum restart agar mic tidak bocor setelah cleanup
+    try { rec.start(); } catch { _globalSpeechRecs.delete(rec); recRef.current = null; if (!destroyedRef.current) setTimeout(start, 800); }
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
+    destroyedRef.current = false; // reset saat effect baru mount
     if (!enabled) { enabledRef.current = false; stop(); return () => stop(); }
     let cleanupCalled = false;
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(stream => { if (cleanupCalled) { stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ok */ } }); return; } stream.getTracks().forEach(t => _globalMicTracks.add(t)); ambientStreamRef.current = stream; start(); })
       .catch(() => { if (!cleanupCalled) start(); });
-    return () => { cleanupCalled = true; enabledRef.current = false; stop(); };
+    return () => { cleanupCalled = true; enabledRef.current = false; destroyedRef.current = true; stop(); };
   }, [enabled, start, stop]);
 }
 
 // ─── getWhisperApiKey ─────────────────────────────────────────────────────────
+// BUG-L1 FIX: Prioritas key didokumentasikan eksplisit:
+//   1. OPENAI_WHISPER_KEY — key khusus Whisper (paling spesifik)
+//   2. OPENAI_TTS_KEY    — key OpenAI shared untuk TTS/Whisper
+//   3. AI_KEY_OPENAI     — key OpenAI umum (fallback terakhir)
 async function getWhisperApiKey(): Promise<string> {
   const k1 = await sbGetSetting<string>('OPENAI_WHISPER_KEY');
   if (k1?.trim()) return k1.trim();
@@ -224,6 +234,7 @@ async function getWhisperApiKey(): Promise<string> {
   if (k2?.trim()) return k2.trim();
   const k3 = await sbGetSetting<string>('AI_KEY_OPENAI');
   if (k3?.trim()) return k3.trim();
+  console.warn('[Mobile STT] Tidak ada OpenAI key ditemukan. Set salah satu: OPENAI_WHISPER_KEY, OPENAI_TTS_KEY, atau AI_KEY_OPENAI');
   return '';
 }
 

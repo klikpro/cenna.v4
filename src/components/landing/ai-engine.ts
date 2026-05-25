@@ -80,8 +80,12 @@ export function matchesClosingWord(raw: string): boolean {
 }
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
-let _cachedAnamnesisPrompt: string | null = null;
-let _cachedAiBehavior: { ddxCount: number; profile: string; ddx: boolean; ebm: boolean } | null = null;
+// BUG-H1 FIX: Tambah TTL 5 menit agar perubahan prompt admin efektif tanpa reload
+const AI_CACHE_TTL = 5 * 60 * 1000;
+let _cachedAnamnesisPrompt:   string | null = null;
+let _cachedAnamnesisPromptTs: number = 0;
+let _cachedAiBehavior:   { ddxCount: number; profile: string; ddx: boolean; ebm: boolean } | null = null;
+let _cachedAiBehaviorTs: number = 0;
 
 // ─── Template mode state ──────────────────────────────────────────────────────
 export let _activeTemplate: ConversationTemplate | null = null;
@@ -93,17 +97,22 @@ export function setTemplateStepIndex(i: number) { _templateStepIndex = i; }
 export function setTemplateDone(v: boolean) { _templateDone = v; }
 
 async function getAnamnesisPrompt(): Promise<string> {
-  if (_cachedAnamnesisPrompt) return _cachedAnamnesisPrompt;
+  const now = Date.now();
+  // BUG-H1 FIX: cache TTL check — expired setelah 5 menit
+  if (_cachedAnamnesisPrompt !== null && now - _cachedAnamnesisPromptTs < AI_CACHE_TTL) return _cachedAnamnesisPrompt;
   const db = await sbGetSetting<string>('prompt_anamnesis');
-  _cachedAnamnesisPrompt = db || DEFAULT_PROMPT_ANAMNESIS;
+  _cachedAnamnesisPrompt   = db || DEFAULT_PROMPT_ANAMNESIS;
+  _cachedAnamnesisPromptTs = now;
   console.log('[Cenna AI] Prompt anamnesis loaded from', db ? 'database' : 'default fallback');
   return _cachedAnamnesisPrompt;
 }
 
 async function getAiBehavior() {
-  if (_cachedAiBehavior) return _cachedAiBehavior;
+  const now = Date.now();
+  if (_cachedAiBehavior !== null && now - _cachedAiBehaviorTs < AI_CACHE_TTL) return _cachedAiBehavior;
   const db = await sbGetSetting<{ ddxCount: number; profile: string; ddx: boolean; ebm: boolean }>('ai_behavior');
-  _cachedAiBehavior = db || { ddxCount: 3, profile: 'gp', ddx: true, ebm: true };
+  _cachedAiBehavior   = db || { ddxCount: 3, profile: 'gp', ddx: true, ebm: true };
+  _cachedAiBehaviorTs = now;
   console.log('[Cenna AI] AI behavior loaded from', db ? 'database' : 'default fallback');
   return _cachedAiBehavior;
 }
@@ -137,11 +146,14 @@ export function resetAnamnesisState() {
     rpd: '', rpk: '', rps: '', pemfis: '',
     phase: 'gathering', missing_fields: [],
   };
-  _cachedAnamnesisPrompt = null;
-  _cachedAiBehavior = null;
-  _activeTemplate   = null;
+  // BUG-H1 FIX: Reset cache timestamps agar prompt di-fetch ulang di sesi berikutnya
+  _cachedAnamnesisPrompt   = null;
+  _cachedAnamnesisPromptTs = 0;
+  _cachedAiBehavior        = null;
+  _cachedAiBehaviorTs      = 0;
+  _activeTemplate    = null;
   _templateStepIndex = 0;
-  _templateDone     = false;
+  _templateDone      = false;
 }
 
 // ─── Fuzzy match trigger ──────────────────────────────────────────────────────
@@ -156,7 +168,10 @@ export function fuzzyMatchTrigger(userSpeech: string, triggerText: string): bool
   const speech  = normalize(userSpeech);
   const trigger = normalize(triggerText);
   const STOP = new Set(['yang', 'dengan', 'dari', 'untuk', 'pada', 'adalah', 'ada', 'dan', 'atau']);
-  const words = trigger.split(' ').filter(w => w.length > 3 && !STOP.has(w));
+  // BUG-L2 FIX: gunakan semua kata jika tidak ada kata panjang (>3 char)
+  // Sebelumnya: jika words.length===0, langsung exact match — terlalu ketat untuk trigger pendek
+  const longWords = trigger.split(' ').filter(w => w.length > 3 && !STOP.has(w));
+  const words = longWords.length > 0 ? longWords : trigger.split(' ').filter(Boolean);
   if (words.length === 0) return speech.includes(trigger);
   const matched   = words.filter(w => speech.includes(w));
   const threshold = Math.max(1, Math.ceil(words.length * 0.5));

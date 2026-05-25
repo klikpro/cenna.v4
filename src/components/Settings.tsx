@@ -33,12 +33,17 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   const [notifError, setNotifError] = useState(true);
   const [notifToken, setNotifToken] = useState(true);
 
+  // BUG-M5 FIX: loading state untuk mencegah double-submit
+  const [savingPlatform, setSavingPlatform] = useState(false);
+
   // 4. Branding states
+  const [brandName,    setBrandName]    = useState('');   // BUG-H3 FIX: dipisah dari platformName
   const [brandTagline, setBrandTagline] = useState('Ambient Clinical Intelligence');
   const [colorPrimary, setColorPrimary] = useState('#1e2a4a');
-  const [colorAccent, setColorAccent] = useState('#b8a898');
-  const [logoUrl, setLogoUrl] = useState<string>('');
+  const [colorAccent, setColorAccent]   = useState('#b8a898');
+  const [logoUrl, setLogoUrl]           = useState<string>('');
   const [logoUploading, setLogoUploading] = useState(false);
+  const [savingBranding, setSavingBranding] = useState(false);
   const logoInputRef = React.useRef<HTMLInputElement>(null);
 
   // 5. Orb visual model
@@ -66,10 +71,11 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       }
       const b = await sbGetSetting<BrandingSettings>('branding');
       if (b) {
-        setBrandTagline(b.tagline);
-        setColorPrimary(b.colorPrimary);
-        setColorAccent(b.colorAccent);
-        if (b.logoUrl) setLogoUrl(b.logoUrl);
+        if (b.brand)        setBrandName(b.brand);        // BUG-H3 FIX: load ke state terpisah
+        if (b.tagline)      setBrandTagline(b.tagline);
+        if (b.colorPrimary) setColorPrimary(b.colorPrimary);
+        if (b.colorAccent)  setColorAccent(b.colorAccent);
+        if (b.logoUrl)      setLogoUrl(b.logoUrl);
       }
       const orbModel = await sbGetSetting<string>('orb_visual_model');
       if (orbModel) setOrbVisualModel(orbModel as 'classic' | 'aurora' | 'pulse' | 'wave');
@@ -98,18 +104,24 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   }, []);
 
   const handleSavePlatform = async () => {
-    const payload: PlatformSettings = {
-      name: platformName.trim(),
-      org: platformOrg.trim(),
-      email: platformEmail.trim(),
-      phone: platformPhone.trim(),
-      tz: platformTz,
-      currency: 'IDR',
-      address: platformAddress.trim(),
-    };
-    await sbSetSetting('platform', payload);
-    await sbAddLog('success', 'SYSTEM', 'Platform profile settings saved.');
-    alert('Informasi platform klinik berhasil diperbarui!');
+    if (savingPlatform) return; // BUG-M5 FIX: guard double submit
+    setSavingPlatform(true);
+    try {
+      const payload: PlatformSettings = {
+        name: platformName.trim(),
+        org: platformOrg.trim(),
+        email: platformEmail.trim(),
+        phone: platformPhone.trim(),
+        tz: platformTz,
+        currency: 'IDR',
+        address: platformAddress.trim(),
+      };
+      await sbSetSetting('platform', payload);
+      await sbAddLog('success', 'SYSTEM', 'Platform profile settings saved.');
+      alert('Informasi platform klinik berhasil diperbarui!');
+    } finally {
+      setSavingPlatform(false);
+    }
   };
 
   const handleSaveProfile = async () => {
@@ -148,19 +160,61 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
   };
 
   const handleSaveBranding = async () => {
-    const payloadHandler: BrandingSettings = {
-      brand: platformName.trim(),
-      tagline: brandTagline.trim(),
-      colorPrimary,
-      colorHex: colorPrimary,
-      colorAccent,
-      colorAccentHex: colorAccent,
-      logoUrl: logoUrl || undefined,
-    };
-    await sbSetSetting('branding', payloadHandler);
-    await sbAddLog('success', 'SYSTEM', 'Platform customized visual variables saved.');
-    alert('Aturan visual branding klinik di-lock!');
+    if (savingBranding) return;
+    setSavingBranding(true);
+    try {
+      // BUG-H3 FIX: gunakan brandName (terpisah) bukan platformName
+      const payloadHandler: BrandingSettings = {
+        brand:         brandName.trim() || platformName.trim(), // fallback ke platformName jika kosong
+        tagline:       brandTagline.trim(),
+        colorPrimary,
+        colorHex:      colorPrimary,
+        colorAccent,
+        colorAccentHex: colorAccent,
+        logoUrl:       logoUrl || undefined,
+      };
+      await sbSetSetting('branding', payloadHandler);
+      await sbAddLog('success', 'SYSTEM', 'Platform customized visual variables saved.');
+      alert('Aturan visual branding klinik di-lock!');
+    } finally {
+      setSavingBranding(false);
+    }
   };
+
+  // BUG-C1 FIX: Kompres gambar via Canvas sebelum simpan sebagai base64
+  // Menghindari JSONB Supabase > 1MB (file 512KB → base64 682KB)
+  const compressImage = (file: File, maxBytes = 150 * 1024): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          // Hitung dimensi agar tidak lebih dari 512px di sisi terpanjang
+          const MAX_DIM = 512;
+          let { width, height } = img;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width > height) { height = Math.round(height * MAX_DIM / width); width = MAX_DIM; }
+            else                { width  = Math.round(width  * MAX_DIM / height); height = MAX_DIM; }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+          // Coba quality 0.7 → 0.5 → 0.35 sampai di bawah maxBytes
+          let quality = 0.7;
+          let result  = canvas.toDataURL('image/jpeg', quality);
+          while (result.length > maxBytes * 1.37 && quality > 0.3) {
+            quality -= 0.15;
+            result   = canvas.toDataURL('image/jpeg', quality);
+          }
+          console.debug(`[CENNA:Settings] Logo compressed: quality=${quality.toFixed(2)}, size≈${(result.length/1024).toFixed(0)}KB`);
+          resolve(result);
+        };
+        img.onerror = reject;
+        img.src = ev.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -174,28 +228,40 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       return;
     }
     setLogoUploading(true);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
-      setLogoUrl(dataUrl);
-      setLogoUploading(false);
-    };
-    reader.readAsDataURL(file);
+    // SVG tidak perlu dikompresi, langsung baca as-is
+    if (file.type === 'image/svg+xml') {
+      const reader = new FileReader();
+      reader.onload = (ev) => { setLogoUrl(ev.target?.result as string); setLogoUploading(false); };
+      reader.readAsDataURL(file);
+    } else {
+      compressImage(file)
+        .then(dataUrl => { setLogoUrl(dataUrl); setLogoUploading(false); })
+        .catch(() => { alert('Gagal memproses gambar.'); setLogoUploading(false); });
+    }
   };
 
+  // BUG-H2 FIX: Hapus logo harus di-persist ke DB (bukan hanya update state lokal)
+  // Sebelumnya: setLogoUrl('') → logo lama dari DB tetap muncul setelah refresh
   const handleRemoveLogo = async () => {
-    if (confirm('Hapus logo kustom dan kembali ke logo default CENNA?')) {
-      setLogoUrl('');
+    if (!confirm('Hapus logo kustom dan kembali ke logo default CENNA?')) return;
+    setLogoUrl('');
+    try {
+      const currentBranding = await sbGetSetting<Record<string, unknown>>('branding') || {};
+      await sbSetSetting('branding', { ...currentBranding, logoUrl: '' });
+      console.debug('[CENNA:Settings] Logo dihapus dari DB (branding.logoUrl = "")');
+    } catch (e) {
+      console.warn('[CENNA:Settings] Gagal hapus logo dari DB:', e);
     }
   };
 
   const handleClearCache = async () => {
     if (confirm('Yakin ingin membersihkan seluruh data simpanan browser? Semua setting API Anda harus diketik ulang.')) {
-      // BUG-05 FIX: Revoke sesi Supabase di server sebelum menghapus local storage
       await sbSignOut();
-      localStorage.clear();
-      sessionStorage.clear(); // BUG-M3 FIX: Hapus juga sessionStorage agar tidak ada sesi orphan
-      alert('Local storage berhasil dibersihkan! Mulai ulang halaman...');
+      // BUG-L4 FIX: Hapus hanya key dengan prefix CENNA_ agar library pihak ketiga tidak terganggu
+      const cennaKeys = Object.keys(localStorage).filter(k => k.startsWith('CENNA_') || k.startsWith('sb-'));
+      cennaKeys.forEach(k => localStorage.removeItem(k));
+      sessionStorage.clear();
+      alert('Data CENNA berhasil dibersihkan! Mulai ulang halaman...');
       window.location.reload();
     }
   };
@@ -315,9 +381,10 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
               <button
                 id="btn-save-platform"
                 onClick={handleSavePlatform}
-                className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+                disabled={savingPlatform}
+                className="px-6 py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                💾 Simpan Informasi Platform
+                {savingPlatform ? '⏳ Menyimpan…' : '💾 Simpan Informasi Platform'}
               </button>
             </div>
           </div>
@@ -453,6 +520,22 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
                   <p className="text-[9px] text-emerald-600 font-semibold">✓ Logo akan tampil di halaman depan. Klik "Lock Visual Branding" untuk menyimpan.</p>
                 )}
               </div>
+              {/* Brand name terpisah dari nama klinik (BUG-H3 FIX) */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                  Nama Brand / Wordmark
+                </label>
+                <input
+                  id="settings-brand-name"
+                  type="text"
+                  value={brandName}
+                  onChange={(e) => setBrandName(e.target.value)}
+                  placeholder={platformName || 'Nama tampil di wordmark'}
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-[#1e2a4a]"
+                />
+                <p className="text-[9px] text-slate-400">Nama yang tampil di wordmark landing page. Biarkan kosong untuk pakai Nama Platform.</p>
+              </div>
+
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                   Tagline Klinik Platform
@@ -504,9 +587,10 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
             <button
               id="btn-save-branding"
               onClick={handleSaveBranding}
-              className="w-full py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md"
+              disabled={savingBranding}
+              className="w-full py-3 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Lock Visual Branding
+              {savingBranding ? '⏳ Menyimpan…' : '🔒 Lock Visual Branding'}
             </button>
           </div>
 

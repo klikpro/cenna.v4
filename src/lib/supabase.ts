@@ -65,7 +65,7 @@ export function getAdminClient(): SupabaseClient | null {
 
 export const DEMO_AUDIT_LOGS: AuditLogEntry[] = [
   { id: 'log_a', ts: '2026-05-24 09:00:00', level: 'success', category: 'AI', message: 'Sesi anamnesis CENNA berhasil diselesaikan.', user: 'SYSTEM', ip: 'unknown', detail: undefined },
-  { id: 'log_b', ts: '2026-05-24 08:55:00', level: 'info', category: 'AUTH', message: 'Login administrator berhasil.', user: 'admin@cennaai.id', ip: 'unknown', detail: undefined },
+  { id: 'log_b', ts: '2026-05-24 08:55:00', level: 'info', category: 'AUTH', message: 'Login administrator berhasil.', user: 'admin', ip: 'unknown', detail: undefined },
 ];
 
 // \u2500\u2500 LOCAL FALLBACK HELPERS (hanya untuk sbAddLog saat Supabase tidak tersedia) \u2500\u2500\u2500\u2500\u2500\u2500
@@ -89,6 +89,7 @@ export function addLocalLog(level: AuditLogEntry['level'], category: AuditLogEnt
     ip: 'unknown',
     detail: detailObj ? JSON.stringify(detailObj) : undefined,
   });
+  saveLocalLogs(logs); // BUG-H4 FIX: persist ke localStorage
 }
 
 // ── DEFAULT PROMPT CONSTANTS ────────────────────────────────────────────────
@@ -214,8 +215,11 @@ export async function sbGetSetting<T>(key: string): Promise<T | null> {
     return null;
   }
 
-  // Coba exact key dulu, lalu fallback ke lowercase (data lama mungkin disimpan lowercase)
-  const keysToTry = Array.from(new Set([key, key.toLowerCase(), key.toUpperCase()]));
+  // BUG-M4 FIX: Hanya coba exact + lowercase (max 2 DB calls vs sebelumnya 3).
+  // Jika key sudah lowercase, hanya 1 query. Uppercase dihapus — tidak ada data yang disimpan uppercase.
+  const keysToTry = key === key.toLowerCase()
+    ? [key]
+    : Array.from(new Set([key, key.toLowerCase()]));
 
   for (const k of keysToTry) {
     const { data, error } = await client

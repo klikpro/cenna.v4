@@ -55,6 +55,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [aiEnabled,      setAiEnabled]      = useState(false);
   const [templateOrbColors, setTemplateOrbColors] = useState<{ primary: string; secondary: string } | null>(null);
   const [templateModeName,  setTemplateModeName]  = useState<string | null>(null);
+  // BUG-M2 FIX: uiStepIndex sebagai React state agar badge step reaktif (module var tidak trigger re-render)
+  const [uiStepIndex,    setUiStepIndex]    = useState(0);
   const [orbVisualModel, setOrbVisualModel] = useState<OrbVisualModel>('classic');
   const [orbSize, setOrbSize] = useState(() => Math.min(window.innerWidth * 0.88, window.innerHeight * 0.88, 700));
   const [brandColors, setBrandColors] = useState({ primary: '#1e2a4a', accent: '#b8a898' });
@@ -65,6 +67,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [tagline,        setTagline]        = useState('Clinical Intelligence');
   // ── Missing fields (state agar reaktif di UI) ─────────────────────────────
   const [missingFields,  setMissingFields]  = useState<string[]>([]);
+  // BUG-N2 FIX: state untuk showLoginButton dari landing_config
+  const [showLoginButton, setShowLoginButton] = useState(true);
 
   const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
   const sessionDataRef         = useRef<CapturedData[]>([]);
@@ -92,17 +96,20 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       // Branding
       const b = await sbGetSetting<{ logoUrl?: string; brand?: string; tagline?: string; colorPrimary?: string; colorAccent?: string }>('branding');
-      if (b?.logoUrl)      setLogoUrl(b.logoUrl);
       if (b?.brand)        setAppName(b.brand);
       if (b?.tagline)      setTagline(b.tagline);
       if (b?.colorPrimary || b?.colorAccent) setBrandColors({ primary: b.colorPrimary ?? '#1e2a4a', accent: b.colorAccent ?? '#b8a898' });
+      // BUG-H2 FIX: cek typeof string agar logoUrl '' (hapus) ter-apply, bukan di-skip sebagai falsy
+      if (typeof b?.logoUrl === 'string') setLogoUrl(b.logoUrl);
 
       // Landing config — prioritas lebih tinggi dari branding, override jika ada
-      // BUG-11 FIX: tambah logoUrl ke type sehingga logo dari Settings Landing Page terbaca
-      const lc = await sbGetSetting<{ appName?: string; tagline?: string; logoUrl?: string; wakeGreeting?: string }>('landing_config');
-      if (lc?.logoUrl)  setLogoUrl(lc.logoUrl);        // override branding.logoUrl
+      const lc = await sbGetSetting<{ appName?: string; tagline?: string; logoUrl?: string; wakeGreeting?: string; showLoginButton?: boolean }>('landing_config');
       if (lc?.appName)  setAppName(lc.appName);
       if (lc?.tagline)  setTagline(lc.tagline);
+      // BUG-H2 FIX: typeof string check agar penghapusan logo ('') ter-apply
+      if (typeof lc?.logoUrl === 'string') setLogoUrl(lc.logoUrl);
+      // BUG-N2 FIX: baca showLoginButton — default true jika belum dikonfigurasi
+      if (typeof lc?.showLoginButton === 'boolean') setShowLoginButton(lc.showLoginButton);
 
     })();
 
@@ -132,6 +139,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     sessionDataRef.current = [];
     setTemplateOrbColors(null);
     setTemplateModeName(null);
+    setUiStepIndex(0); // BUG-N4 FIX: reset React state badge step
     setWakeFlash(true);
     setTimeout(() => setWakeFlash(false), 900);
     setPhase('speaking');
@@ -159,12 +167,14 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         if (fuzzyMatchTrigger(data.transcript, steps[i].trigger_text)) { matchedStep = steps[i]; matchedIdx = i; break; }
       }
       if (!matchedStep) { setPhase('listening'); return; }
+      // BUG-M2 FIX: aggiorna sia il module var che il React state
       setTemplateStepIndex(matchedIdx + 1);
+      setUiStepIndex(matchedIdx + 1);
       setTemplateOrbColors({ primary: matchedStep.orb_primary, secondary: matchedStep.orb_secondary });
       const fullResponse = matchedStep.next_question ? `${matchedStep.response_text} ${matchedStep.next_question}` : matchedStep.response_text;
       setPhase('responding');
       speak(fullResponse, () => {
-        if (_templateStepIndex >= steps.length) { setTemplateDone(true); setTemplateOrbColors(null); setTemplateModeName(null); }
+        if (_templateStepIndex >= steps.length) { setTemplateDone(true); setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); }
         else { const next = steps[_templateStepIndex]; setTemplateOrbColors({ primary: next.orb_primary, secondary: next.orb_secondary }); }
         setPhase('listening');
       });
@@ -209,7 +219,10 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       if (isSessionEnd) {
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
-        sbSaveSession({ id: sessionId, created_at: new Date().toISOString(), anamnesis: aiResult.anamnesis, conclusion: aiResult.conclusion, red_flags: aiResult.red_flags, transcript_full: sessionDataRef.current.map(d => d.transcript).join(' — '), keluhan: Array.from(new Set(sessionDataRef.current.flatMap(d => d.keluhan))), obat: Array.from(new Set(sessionDataRef.current.flatMap(d => d.obat))), session_rounds: Math.ceil(currentHistory.length / 2) }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
+        // BUG-N6 FIX: sertakan doctor_name dari sesi admin yang tersimpan
+        let doctorName = '';
+        try { doctorName = JSON.parse(sessionStorage.getItem('cenna_admin') || '{}').name || ''; } catch { /* ignore */ }
+        sbSaveSession({ id: sessionId, created_at: new Date().toISOString(), doctor_name: doctorName || undefined, anamnesis: aiResult.anamnesis, conclusion: aiResult.conclusion, red_flags: aiResult.red_flags, transcript_full: sessionDataRef.current.map(d => d.transcript).join(' — '), keluhan: Array.from(new Set(sessionDataRef.current.flatMap(d => d.keluhan))), obat: Array.from(new Set(sessionDataRef.current.flatMap(d => d.obat))), session_rounds: Math.ceil(currentHistory.length / 2) }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
         speak(aiResult.voice_response, () => { if (aiResult.conclusion) { setConclusionData(aiResult.conclusion); setRedFlagsData(aiResult.red_flags); } setCapturedData(mergeSessionData(sessionDataRef.current)); setPhase('popup'); });
       } else {
         speak(aiResult.voice_response, () => setPhase('listening'));
@@ -226,8 +239,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   useAmbientListener({ enabled: phase === 'listening' && !isMobile, silenceMs: 3000, onData: handleAmbientData });
   useMobileAmbientListener({ enabled: phase === 'listening' && isMobile, silenceMs: 2500, onData: handleAmbientData });
 
-  const handleClosePopup = () => { setCapturedData(null); setConclusionData(null); setRedFlagsData([]); conversationHistoryRef.current = []; sessionDataRef.current = []; resetAnamnesisState(); firedRef.current = false; setPhase('idle'); };
-  const handleEndConversation = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setCapturedData(null); setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); firedRef.current = false; setPhase('idle'); };
+  // BUG-M3 FIX: reset semua template visual state agar badge tidak tertinggal
+  const handleClosePopup = () => { setCapturedData(null); setConclusionData(null); setRedFlagsData([]); conversationHistoryRef.current = []; sessionDataRef.current = []; resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
+  const handleEndConversation = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setCapturedData(null); setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
   const handleSOAP = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setCapturedData(null); setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); onLoginClick(); };
 
   return (
@@ -254,11 +268,14 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         </div>
       </div>
 
-      <button onClick={onLoginClick}
-        className="absolute top-5 right-7 z-30 text-[10px] tracking-[0.18em] uppercase text-[#1e2a4a]/30 hover:text-[#1e2a4a]/60 transition-colors"
-        style={{ fontFamily: "'DM Mono', monospace", background: 'none', border: 'none', cursor: 'pointer' }}>
-        Admin →
-      </button>
+      {/* BUG-N2 FIX: tombol Admin hanya tampil jika showLoginButton = true */}
+      {showLoginButton && (
+        <button onClick={onLoginClick}
+          className="absolute top-5 right-7 z-30 text-[10px] tracking-[0.18em] uppercase text-[#1e2a4a]/30 hover:text-[#1e2a4a]/60 transition-colors"
+          style={{ fontFamily: "'DM Mono', monospace", background: 'none', border: 'none', cursor: 'pointer' }}>
+          Admin →
+        </button>
+      )}
 
       {/* Template mode badge */}
       {templateModeName && (
@@ -266,7 +283,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-full border" style={{ background: templateOrbColors ? `${templateOrbColors.primary}15` : 'rgba(30,42,74,0.08)', borderColor: templateOrbColors ? `${templateOrbColors.primary}30` : 'rgba(30,42,74,0.12)', fontFamily: "'DM Mono', monospace" }}>
             <span style={{ fontSize: 8 }}>📋</span>
             <span className="text-[9px] font-bold tracking-widest uppercase" style={{ color: templateOrbColors?.primary ?? '#1e2a4a' }}>Template: {templateModeName}</span>
-            <span className="text-[8px] tracking-wider" style={{ color: templateOrbColors?.primary ?? '#1e2a4a', opacity: 0.5 }}>· step {_templateStepIndex}/{_activeTemplate?.steps.length ?? 0}</span>
+            <span className="text-[8px] tracking-wider" style={{ color: templateOrbColors?.primary ?? '#1e2a4a', opacity: 0.5 }}>· step {uiStepIndex}/{_activeTemplate?.steps.length ?? 0}</span>
           </div>
         </div>
       )}

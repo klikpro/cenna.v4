@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient, sbSetSetting, sbGetSetting, sbAddLog } from '../lib/supabase';
-import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES } from './landing/tts-engine';
+import { ELEVEN_FREE_VOICES, TTS_PROVIDERS, GOOGLE_TTS_VOICES, OPENAI_TTS_VOICES, invalidateTtsCache } from './landing/tts-engine';
 
 
 interface ApiSettingsProps {
@@ -307,12 +307,24 @@ let _aiConfigCache: {
   maxTokens: number;
 } | null = null;
 
+// BUG-N1 FIX: Tambah TTL 5 menit agar admin ganti provider/key efektif tanpa reload
+// Sebelumnya: cache tidak pernah expire — provider lama tetap dipakai selama tab terbuka
+const _AI_CONFIG_CACHE_TTL = 5 * 60 * 1000;
+let _aiConfigCacheTs = 0;
+
 export function clearAiConfigCache() {
   _aiConfigCache = null;
+  _aiConfigCacheTs = 0;
+  console.debug('[CENNA:aiConfigCache] Cache invalidated');
 }
 
 export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
-  if (_aiConfigCache) { console.debug('[CENNA:loadAiConfigFromDb] Returning cached config', _aiConfigCache); return _aiConfigCache; }
+  const now = Date.now();
+  // BUG-N1 FIX: TTL check — expire setelah 5 menit
+  if (_aiConfigCache && now - _aiConfigCacheTs < _AI_CONFIG_CACHE_TTL) {
+    console.debug('[CENNA:loadAiConfigFromDb] Returning cached config (TTL ok)', _aiConfigCache);
+    return _aiConfigCache;
+  }
 
   console.debug('[CENNA:loadAiConfigFromDb] Fetching api_ai_config from DB...');
   const dbAiConfig = await sbGetSetting<{
@@ -341,6 +353,7 @@ export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
     temperature: dbAiConfig?.temperature ?? 0.3,
     maxTokens:   dbAiConfig?.maxTokens   ?? 2048,
   };
+  _aiConfigCacheTs = Date.now(); // BUG-N1 FIX: catat waktu cache
   console.debug('[CENNA:loadAiConfigFromDb] Cache tersimpan:', _aiConfigCache);
   return _aiConfigCache;
 }
@@ -676,9 +689,12 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
       await sbSetSetting('tts_provider', ttsPrefProvider);
       await sbSetSetting('tts_preview_text', ttsPreviewText.trim());
-      console.debug('[CENNA:handleSaveSTT] ✅ Semua TTS config tersimpan. Provider utama:', ttsPrefProvider);
+      // BUG-N5 FIX: invalidasi TTS cache agar perubahan efektif segera (tidak tunggu 5 menit TTL)
+      invalidateTtsCache();
+      console.debug('[CENNA:handleSaveSTT] ✅ Semua TTS config tersimpan & cache invalidated. Provider utama:', ttsPrefProvider);
       await sbAddLog('success', 'SYSTEM', `STT/TTS config updated. TTS utama: ${ttsPrefProvider}.`);
       alert('✅ Konfigurasi Speech/TTS berhasil disimpan ke database!');
+
     } catch (e: any) {
       console.error('[CENNA:handleSaveSTT] ❌ Error:', e);
       alert(`❌ Gagal menyimpan STT config!\n\n${e.message}`);
