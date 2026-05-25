@@ -2027,10 +2027,18 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       return; // JANGAN lanjut ke blok AI
     }
 
-    // ─── AI MODE (normal atau setelah semua template step selesai) ───────
+    // ─── MODE TANPA AI ────────────────────────────────────────────────────
+    // Cenna tetap memberi respons suara konfirmasi dan tampilkan ringkasan
     if (!aiEnabled) {
-      setCapturedData(data);
-      setPhase('listening');
+      sessionDataRef.current.push(data);
+      setPhase('responding');
+      speak(
+        'Baik dokter, data percakapan sudah saya catat.',
+        () => {
+          setCapturedData(mergeSessionData(sessionDataRef.current));
+          setPhase('popup');
+        }
+      );
       return;
     }
 
@@ -2038,10 +2046,19 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     currentHistory.push({ role: 'user', content: data.transcript });
     setPhase('processing');
     setAiLabel('Menganalisis percakapan…');
+    console.log('[Cenna AI] memanggil AI, aiEnabled:', aiEnabled, ', transcript:', data.transcript.slice(0, 60));
 
     try {
       setAiLabel('Cenna sedang berpikir…');
-      const aiResult = await callCennaAI(data.transcript, currentHistory.slice(0, -1));
+
+      // Timeout 30 detik — jika AI tidak merespons, beri tahu dokter
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('AI_TIMEOUT')), 30_000)
+      );
+      const aiResult = await Promise.race([
+        callCennaAI(data.transcript, currentHistory.slice(0, -1)),
+        timeoutPromise,
+      ]);
 
       currentHistory.push({ role: 'assistant', content: aiResult.voice_response });
 
@@ -2091,9 +2108,17 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       }
 
     } catch (err) {
-      console.warn('[Cenna AI] gagal:', err);
+      const isTimeout = err instanceof Error && err.message === 'AI_TIMEOUT';
+      console.warn('[Cenna AI] gagal:', isTimeout ? 'timeout 30s' : err);
       currentHistory.pop();
-      setPhase('listening');
+      // Beri tahu dokter ada gangguan — jangan diam saja
+      setPhase('responding');
+      speak(
+        isTimeout
+          ? 'Maaf dokter, Cenna terlalu lama merespons. Silakan ulangi pertanyaan.'
+          : 'Maaf dokter, ada gangguan koneksi. Silakan ulangi lagi.',
+        () => setPhase('listening')
+      );
     }
   }, [aiEnabled]);
 
