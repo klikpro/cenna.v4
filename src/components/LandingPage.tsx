@@ -680,6 +680,7 @@ function useWakeWord(onDetected: () => void, active: boolean) {
 
   useEffect(() => {
     if (!active) {
+      activeRef.current = false; // ← pastikan tidak ada restart setelah stop
       stop();
       return () => stop();
     }
@@ -710,7 +711,8 @@ function useWakeWord(onDetected: () => void, active: boolean) {
       });
 
     return () => {
-      cleanupCalled = true; // Set flag SEBELUM stop() agar race condition terdeteksi
+      cleanupCalled = true;  // Set flag SEBELUM stop() agar race condition terdeteksi
+      activeRef.current = false; // ← Pastikan onend tidak restart setelah abort
       stop();
     };
   }, [active, start, stop]);
@@ -838,7 +840,11 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
-    if (!enabled) { stop(); return () => stop(); }
+    if (!enabled) {
+      enabledRef.current = false; // ← pastikan tidak ada restart setelah stop
+      stop();
+      return () => stop();
+    }
 
     let cleanupCalled = false;
     navigator.mediaDevices.getUserMedia({ audio: true })
@@ -856,7 +862,11 @@ function useAmbientListener({ enabled, silenceMs = 3000, onData }: AmbientListen
         if (!cleanupCalled) start();
       });
 
-    return () => { cleanupCalled = true; stop(); };
+    return () => {
+      cleanupCalled = true;
+      enabledRef.current = false; // ← Pastikan onend tidak restart setelah abort
+      stop();
+    };
   }, [enabled, start, stop]);
 }
 
@@ -1611,6 +1621,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
+  // Di mobile, SpeechRecognition continuous tidak didukung penuh — tampilkan tombol tap
+  const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
   useOrbCanvas(canvasRef, phase, brandColors);
 
   // handleWakeWord — gunakan firedRef sebagai guard, bukan phaseRef
@@ -1922,8 +1935,13 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
             Wake word tidak didukung browser ini
           </p>
         )}
-        {phase === 'idle' && hasSpeechAPI && (
+        {phase === 'idle' && hasSpeechAPI && !isMobile && (
           <p className="text-[11px] tracking-[0.1em] text-[#1e2a4a]/30" style={{ fontFamily: "'DM Mono', monospace" }}>
+            {aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}
+          </p>
+        )}
+        {phase === 'idle' && hasSpeechAPI && isMobile && (
+          <p className="text-[10px] tracking-[0.1em] text-[#1e2a4a]/30" style={{ fontFamily: "'DM Mono', monospace" }}>
             {aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}
           </p>
         )}
@@ -1955,6 +1973,57 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
           </p>
         )}
       </div>
+
+      {/* Tombol tap untuk mobile — karena SpeechRecognition continuous tidak berjalan di HP */}
+      {phase === 'idle' && hasSpeechAPI && isMobile && (
+        <button
+          onClick={handleWakeWord}
+          style={{
+            position: 'absolute',
+            bottom: '6rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 25,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 6,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            pointerEvents: 'auto',
+          }}
+        >
+          <div style={{
+            width: 52,
+            height: 52,
+            borderRadius: '50%',
+            background: 'rgba(30,42,74,0.08)',
+            border: '1.5px solid rgba(30,42,74,0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'background 0.2s, transform 0.15s',
+          }}
+            onTouchStart={e => (e.currentTarget.style.background = 'rgba(30,42,74,0.16)')}
+            onTouchEnd={e => (e.currentTarget.style.background = 'rgba(30,42,74,0.08)')}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <rect x="9" y="2" width="6" height="12" rx="3" fill="rgba(30,42,74,0.7)" />
+              <path d="M5 11a7 7 0 0014 0" stroke="rgba(30,42,74,0.7)" strokeWidth="1.6" strokeLinecap="round" />
+              <line x1="12" y1="18" x2="12" y2="22" stroke="rgba(30,42,74,0.7)" strokeWidth="1.6" strokeLinecap="round" />
+              <line x1="9" y1="22" x2="15" y2="22" stroke="rgba(30,42,74,0.7)" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </div>
+          <span style={{
+            fontSize: 9,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'rgba(30,42,74,0.35)',
+            fontFamily: "'DM Mono', monospace",
+          }}>Ketuk untuk mulai</span>
+        </button>
+      )}
 
       <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center gap-2 z-20">
         <StatusPill phase={phase} aiLabel={aiLabel} />
