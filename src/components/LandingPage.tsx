@@ -1874,8 +1874,30 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       const model = await sbGetSetting<string>('orb_visual_model');
       if (model) setOrbVisualModel(model as OrbVisualModel);
 
-      const enabled = await sbGetSetting<boolean>('ai_enabled');
-      setAiEnabled(!!enabled);
+      // ─── AI enabled: aktif jika API key provider tersedia di DB ─────────
+      // 'ai_enabled' tidak pernah di-set dari UI — ganti dengan deteksi otomatis
+      const aiCfg = await sbGetSetting<{ provider?: string; keyConfigured?: boolean }>('api_ai_config');
+      if (aiCfg?.keyConfigured) {
+        // api_ai_config sudah ada dan ditandai keyConfigured
+        setAiEnabled(true);
+        console.log('[Cenna] AI enabled via api_ai_config.keyConfigured');
+      } else {
+        // Fallback: cek apakah ada key untuk provider aktif atau provider manapun
+        const activeProvider = aiCfg?.provider || 'anthropic';
+        const providers = ['anthropic', 'openai', 'gemini', 'mistral', 'groq', 'deepseek', 'openrouter'];
+        const toCheck = [activeProvider, ...providers.filter(p => p !== activeProvider)];
+        let foundKey = false;
+        for (const p of toCheck) {
+          const key = await sbGetSetting<string>(`AI_KEY_${p.toUpperCase()}`);
+          if (key?.trim()) {
+            foundKey = true;
+            console.log('[Cenna] AI enabled — key found for provider:', p);
+            break;
+          }
+        }
+        setAiEnabled(foundKey);
+        if (!foundKey) console.warn('[Cenna] AI disabled — tidak ada API key AI yang tersimpan di database. Pergi ke Admin → Pengaturan → AI Engine untuk mengkonfigurasi.');
+      }
 
       const b = await sbGetSetting<{ logoUrl?: string; colorPrimary?: string; colorAccent?: string }>('branding');
       if (b?.logoUrl) setCustomLogoUrl(b.logoUrl);
