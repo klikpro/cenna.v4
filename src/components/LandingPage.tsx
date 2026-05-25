@@ -264,7 +264,7 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
 
   const raw = await callActiveAI(
     enrichedPrompt,
-    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nEvaluasi missing_fields di atas. Tanya hanya field yang benar-benar kosong dan paling mengubah probabilitas diagnosis. Berikan conclusion segera jika data sudah cukup.`
+    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nInstruksi:\n- Evaluasi missing_fields di atas\n- Ajukan 1-2 pertanyaan lanjutan yang paling penting secara klinis\n- Tetap di phase "gathering" selama masih ada field penting yang belum tergali\n- Set session_end:true dan sertakan conclusion HANYA jika anamnesis benar-benar sudah lengkap dan kamu yakin dengan diagnosisnya\n- Jangan tergesa-gesa menutup sesi hanya dari 1-2 kalimat pertama`
   );
 
   const cleaned = raw
@@ -280,7 +280,15 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
     }
     if (parsed.phase === 'complete') _currentAnamnesis.phase = 'complete';
 
-    const isComplete = parsed.phase === 'complete' || parsed.session_end === true || matchesClosingWord(transcript);
+    // conclusion dianggap valid hanya jika ada diagnosis_utama yang berisi teks
+    const hasValidConclusion = parsed.conclusion
+      && typeof parsed.conclusion === 'object'
+      && typeof parsed.conclusion.diagnosis_utama === 'string'
+      && parsed.conclusion.diagnosis_utama.trim().length > 0;
+
+    // isComplete: hanya dari session_end eksplisit ATAU closing word user
+    // TIDAK dari phase:'complete' saja — biarkan AI lanjutkan tanya
+    const isComplete = parsed.session_end === true || matchesClosingWord(transcript);
 
     return {
       voice_response: typeof parsed.voice_response === 'string' && parsed.voice_response.trim()
@@ -291,7 +299,7 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
       pertanyaan: Array.isArray(parsed.pertanyaan) ? parsed.pertanyaan : [],
       red_flags:  Array.isArray(parsed.red_flags)  ? parsed.red_flags  : [],
       anamnesis:  { ..._currentAnamnesis },
-      conclusion: parsed.conclusion ?? null,
+      conclusion: hasValidConclusion ? parsed.conclusion : null,
       session_end: isComplete,
     };
   } catch {
@@ -2072,7 +2080,14 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       sessionDataRef.current.push(enrichedData);
       setPhase('responding');
 
-      const isSessionEnd = aiResult.session_end || aiResult.conclusion !== null;
+      // isSessionEnd: hanya trigger popup jika AI benar-benar eksplisit menandai selesai
+      // DAN ada conclusion yang valid (bukan objek kosong atau null)
+      const hasValidConclusion = aiResult.conclusion !== null
+        && typeof aiResult.conclusion === 'object'
+        && typeof (aiResult.conclusion as Record<string,unknown>).diagnosis_utama === 'string'
+        && ((aiResult.conclusion as Record<string,unknown>).diagnosis_utama as string).trim().length > 0;
+
+      const isSessionEnd = aiResult.session_end && hasValidConclusion;
 
       if (isSessionEnd) {
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
