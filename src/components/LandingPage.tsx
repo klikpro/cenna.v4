@@ -1007,6 +1007,7 @@ function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: Ambient
     };
 
     recorderRef.current = recorder;
+    _globalRecorders.add(recorder); // ← daftarkan ke registry global
     isRecordingRef.current = true;
     recorder.start(250); // ambil chunk tiap 250ms
     console.log('[Mobile STT] 🔴 Mulai merekam, MIME:', mimeType);
@@ -1024,10 +1025,14 @@ function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: Ambient
       rec.onstop = null;
       try { rec.stop(); } catch { /* ignore */ }
     }
-    recorderRef.current = null;
+    if (recorderRef.current) {
+      _globalRecorders.delete(recorderRef.current); // ← hapus dari registry
+      recorderRef.current = null;
+    }
     isRecordingRef.current = false;
     chunksRef.current = [];
     if (audioCtxRef.current) {
+      _globalAudioCtxs.delete(audioCtxRef.current); // ← hapus dari registry
       try { audioCtxRef.current.close(); } catch { /* ignore */ }
       audioCtxRef.current = null;
     }
@@ -1067,6 +1072,7 @@ function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: Ambient
 
         const audioCtx = new AudioContext({ sampleRate: 16000 });
         audioCtxRef.current = audioCtx;
+        _globalAudioCtxs.add(audioCtx); // ← daftarkan ke registry global
         const source   = audioCtx.createMediaStreamSource(stream);
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 512;
