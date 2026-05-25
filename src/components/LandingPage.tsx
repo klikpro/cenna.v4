@@ -119,7 +119,7 @@ const CLOSING_PATTERNS = [
   'selesai cenna', 'selesai senna',
   'stop cenna', 'stop senna',
   'akhiri sesi', 'akhiri konsultasi',
-  'terima kasih ya',
+  // 'terima kasih ya' ← DIHAPUS: terlalu generik, match ucapan medis biasa
 ];
 
 function matchesClosingWord(raw: string): boolean {
@@ -230,7 +230,11 @@ function fuzzyMatchTrigger(userSpeech: string, triggerText: string): boolean {
   return isMatch;
 }
 
-async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{
+async function callCennaAI(
+  transcript: string,
+  history: Array<{ role: 'user'|'assistant'; content: string }>,
+  roundNumber: number = 1,  // ronde ke berapa saat ini (mulai dari 1)
+): Promise<{
   voice_response: string;
   keluhan: string[];
   obat: string[];
@@ -262,9 +266,16 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
       history.map(h => `[${h.role === 'user' ? 'Dokter/Pasien' : 'CENNA'}]: ${h.content}`).join('\n')
     : '';
 
+  // Konteks ronde — beri tahu AI kapan boleh menyimpulkan
+  // Minimum 3 ronde sebelum boleh set session_end:true
+  const MIN_ROUNDS = 3;
+  const roundCtx = roundNumber < MIN_ROUNDS
+    ? `[SISTEM: Ini ronde ke-${roundNumber} dari minimum ${MIN_ROUNDS} ronde. JANGAN menyimpulkan atau set session_end:true dulu. Terus gali anamnesis dengan 1-2 pertanyaan lanjutan.]`
+    : `[SISTEM: Ini ronde ke-${roundNumber}. Boleh menyimpulkan dan set session_end:true HANYA jika data anamnesis sudah benar-benar lengkap dan kamu yakin dengan diagnosisnya.]`;
+
   const raw = await callActiveAI(
     enrichedPrompt,
-    `Status anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nInstruksi:\n- Evaluasi missing_fields di atas\n- Ajukan 1-2 pertanyaan lanjutan yang paling penting secara klinis\n- Tetap di phase "gathering" selama masih ada field penting yang belum tergali\n- Set session_end:true dan sertakan conclusion HANYA jika anamnesis benar-benar sudah lengkap dan kamu yakin dengan diagnosisnya\n- Jangan tergesa-gesa menutup sesi hanya dari 1-2 kalimat pertama`
+    `${roundCtx}\n\nStatus anamnesis saat ini:\n${anamnesisCtx}${historyContext}\n\n[Transkrip baru]:\n"${transcript}"\n\nInstruksi:\n- Evaluasi missing_fields di atas\n- Ajukan 1-2 pertanyaan lanjutan yang paling penting secara klinis\n- Tetap di phase "gathering" selama masih ada field penting yang belum tergali\n- Set session_end:true dan sertakan conclusion HANYA jika ronde sudah cukup dan anamnesis benar-benar lengkap`
   );
 
   const cleaned = raw
@@ -286,9 +297,13 @@ async function callCennaAI(transcript: string, history: Array<{ role: 'user'|'as
       && typeof parsed.conclusion.diagnosis_utama === 'string'
       && parsed.conclusion.diagnosis_utama.trim().length > 0;
 
-    // isComplete: hanya dari session_end eksplisit ATAU closing word user
-    // TIDAK dari phase:'complete' saja — biarkan AI lanjutkan tanya
-    const isComplete = parsed.session_end === true || matchesClosingWord(transcript);
+    // ─ Guard minimum ronde ────────────────────────────────────────────
+    // history.length = jumlah pesan sebelum ronde ini (AI + user bergantian)
+    // Minimal 4 pesan (2 ronde penuh AI+user) sebelum diizinkan tutup
+    const minRoundsMet = history.length >= 4 || matchesClosingWord(transcript);
+    const isComplete   = minRoundsMet && (parsed.session_end === true || matchesClosingWord(transcript));
+
+    console.log('[Cenna AI] ronde:', history.length, '| session_end raw:', parsed.session_end, '| isComplete:', isComplete, '| hasConclusion:', hasValidConclusion);
 
     return {
       voice_response: typeof parsed.voice_response === 'string' && parsed.voice_response.trim()
@@ -2063,8 +2078,10 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('AI_TIMEOUT')), 30_000)
       );
+      // history sebelum ronde ini = currentHistory.slice(0,-1), panjangnya = 2*(ronde-1)
+      const currentRound = Math.floor(currentHistory.length / 2); // 1-based: user sudah di-push
       const aiResult = await Promise.race([
-        callCennaAI(data.transcript, currentHistory.slice(0, -1)),
+        callCennaAI(data.transcript, currentHistory.slice(0, -1), currentRound),
         timeoutPromise,
       ]);
 
@@ -2080,14 +2097,20 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       sessionDataRef.current.push(enrichedData);
       setPhase('responding');
 
-      // isSessionEnd: hanya trigger popup jika AI benar-benar eksplisit menandai selesai
-      // DAN ada conclusion yang valid (bukan objek kosong atau null)
+      // ─ Guard minimum ronde di level component ──────────────────────────
+      // currentHistory sudah berisi AI response yang baru di-push
+      // Minimal 6 pesan = 3 ronde penuh (3x user + 3x AI)
+      const roundsDone = Math.floor(currentHistory.length / 2);
+      const userForcedEnd = matchesClosingWord(data.transcript);
+
+      // Conclusion valid hanya jika ada diagnosis_utama berisi teks nyata
       const hasValidConclusion = aiResult.conclusion !== null
         && typeof aiResult.conclusion === 'object'
-        && typeof (aiResult.conclusion as Record<string,unknown>).diagnosis_utama === 'string'
-        && ((aiResult.conclusion as Record<string,unknown>).diagnosis_utama as string).trim().length > 0;
+        && typeof (aiResult.conclusion as Record<string, unknown>).diagnosis_utama === 'string'
+        && ((aiResult.conclusion as Record<string, unknown>).diagnosis_utama as string).trim().length > 0;
 
-      const isSessionEnd = aiResult.session_end && hasValidConclusion;
+      const isSessionEnd = (aiResult.session_end && hasValidConclusion && roundsDone >= 3) || userForcedEnd;
+      console.log('[Cenna] roundsDone:', roundsDone, '| session_end:', aiResult.session_end, '| hasConclusion:', hasValidConclusion, '| isSessionEnd:', isSessionEnd);
 
       if (isSessionEnd) {
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
