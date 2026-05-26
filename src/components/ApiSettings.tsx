@@ -429,6 +429,8 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [ttsPrefProvider, setTtsPrefProvider] = useState('');
   // TTS preview text — dikonfigurasi admin via DB
   const [ttsPreviewText, setTtsPreviewText] = useState('');
+  // STT — Durasi deteksi jeda diam (silence detection)
+  const [silenceMs, setSilenceMs] = useState(2000);
 
   const currentProviderDef = AI_PROVIDERS.find(p => p.id === activeProvider) || AI_PROVIDERS[0];
 
@@ -523,6 +525,11 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       if (!ttsProvider) console.warn('[CENNA:loadSettings] ⚠️ tts_provider belum dipilih di DB.');
       setTtsPrefProvider(ttsProvider || '');
       setTtsPreviewText(ttsPreview || '');
+
+      // ── STT Silence duration ──
+      const savedSilenceMs = await sbGetSetting<number>('stt_silence_ms');
+      if (savedSilenceMs) setSilenceMs(savedSilenceMs);
+      console.debug('[CENNA:loadSettings] stt_silence_ms:', savedSilenceMs ?? '(default 2000)');
 
       console.debug('[CENNA:loadSettings] ✅ Semua konfigurasi berhasil dimuat.');
     }
@@ -689,6 +696,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
       await sbSetSetting('tts_provider', ttsPrefProvider);
       await sbSetSetting('tts_preview_text', ttsPreviewText.trim());
+      await sbSetSetting('stt_silence_ms', silenceMs);
       // BUG-N5 FIX: invalidasi TTS cache agar perubahan efektif segera (tidak tunggu 5 menit TTL)
       invalidateTtsCache();
       console.debug('[CENNA:handleSaveSTT] ✅ Semua TTS config tersimpan & cache invalidated. Provider utama:', ttsPrefProvider);
@@ -964,6 +972,39 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               <input id="api-stt-key" type="password" value={sttKey} onChange={e => setSttKey(e.target.value)}
                 placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+            </div>
+          </div>
+
+          {/* Silence Detection Duration */}
+          <div className="border border-[#1e2a4a]/10 rounded-2xl p-4 space-y-3 bg-slate-50/60">
+            <div className="flex items-center gap-2">
+              <span className="text-base">⏱️</span>
+              <div>
+                <h4 className="font-bold text-xs text-[#1e2a4a]">Deteksi Jeda Diam (Silence Detection)</h4>
+                <p className="text-[10px] text-slate-400">Durasi hening setelah bicara berhenti sebelum CENNA mulai memproses. Nilai kecil = responsif, nilai besar = toleran terhadap jeda bicara panjang.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Durasi Jeda (Desktop)</label>
+                <select
+                  id="api-stt-silence-ms"
+                  value={silenceMs}
+                  onChange={e => setSilenceMs(Number(e.target.value))}
+                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs outline-none text-slate-800 cursor-pointer"
+                >
+                  <option value={1000}>1 detik — Sangat Responsif (percakapan cepat)</option>
+                  <option value={1500}>1.5 detik — Cepat</option>
+                  <option value={2000}>2 detik — Seimbang ✅ Rekomendasi</option>
+                  <option value={2500}>2.5 detik — Standar</option>
+                  <option value={3000}>3 detik — Lambat (jeda bicara panjang)</option>
+                  <option value={4000}>4 detik — Sangat Lambat (pasien bicara pelan)</option>
+                </select>
+              </div>
+              <div className="px-4 py-3 bg-[#1e2a4a]/5 rounded-xl text-[10px] text-slate-500 leading-relaxed">
+                <p>📱 <strong>Mobile</strong> otomatis menggunakan <strong>{Math.max(1000, silenceMs - 500)}ms</strong> (lebih cepat 500ms dari desktop)</p>
+                <p className="mt-1">🖥️ <strong>Desktop</strong> menggunakan <strong>{silenceMs}ms</strong></p>
+              </div>
             </div>
           </div>
 

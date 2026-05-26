@@ -75,6 +75,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [missingFields,  setMissingFields]  = useState<string[]>([]);
   // BUG-N2 FIX: state untuk showLoginButton dari landing_config
   const [showLoginButton, setShowLoginButton] = useState(true);
+  // Durasi jeda diam (dari DB stt_silence_ms, default 2 detik)
+  const [silenceMs, setSilenceMs] = useState(2000);
 
   const conversationHistoryRef = useRef<Array<{ role: 'user'|'assistant'; content: string }>>([]);
   const sessionDataRef         = useRef<CapturedData[]>([]);
@@ -116,6 +118,11 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       if (typeof lc?.logoUrl === 'string') setLogoUrl(lc.logoUrl);
       // BUG-N2 FIX: baca showLoginButton — default true jika belum dikonfigurasi
       if (typeof lc?.showLoginButton === 'boolean') setShowLoginButton(lc.showLoginButton);
+
+      // Silence detection duration dari DB
+      const savedSilenceMs = await sbGetSetting<number>('stt_silence_ms');
+      if (savedSilenceMs && savedSilenceMs >= 500) setSilenceMs(savedSilenceMs);
+      console.debug('[CENNA:LandingPage] stt_silence_ms:', savedSilenceMs ?? '(default 2000ms)');
 
     })();
 
@@ -281,8 +288,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
     }
   }, [aiEnabled]);
 
-  useAmbientListener({ enabled: phase === 'listening' && !isMobile, silenceMs: 3000, onData: handleAmbientData });
-  useMobileAmbientListener({ enabled: phase === 'listening' && isMobile, silenceMs: 2500, onData: handleAmbientData });
+  useAmbientListener({ enabled: phase === 'listening' && !isMobile, silenceMs, onData: handleAmbientData });
+  useMobileAmbientListener({ enabled: phase === 'listening' && isMobile, silenceMs: Math.max(1000, silenceMs - 500), onData: handleAmbientData });
 
   // BUG-M3 FIX: reset semua template visual state agar badge tidak tertinggal
   const handleClosePopup = () => { setConclusionData(null); setRedFlagsData([]); conversationHistoryRef.current = []; sessionDataRef.current = []; resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
