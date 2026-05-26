@@ -329,16 +329,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         </button>
       )}
 
-      {/* Template mode badge */}
-      {templateModeName && (
-        <div className="absolute top-5 left-1/2 z-30" style={{ transform: 'translateX(-50%)' }}>
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full border" style={{ background: templateOrbColors ? `${templateOrbColors.primary}15` : 'rgba(30,42,74,0.08)', borderColor: templateOrbColors ? `${templateOrbColors.primary}30` : 'rgba(30,42,74,0.12)', fontFamily: "'DM Mono', monospace" }}>
-            <span style={{ fontSize: 8 }}>📋</span>
-            <span className="text-[9px] font-bold tracking-widest uppercase" style={{ color: templateOrbColors?.primary ?? '#1e2a4a' }}>Template: {templateModeName}</span>
-            <span className="text-[8px] tracking-wider" style={{ color: templateOrbColors?.primary ?? '#1e2a4a', opacity: 0.5 }}>· step {uiStepIndex}/{_activeTemplate?.steps.length ?? 0}</span>
-          </div>
-        </div>
-      )}
+
 
       <div className="absolute inset-0 z-10 flex items-center justify-center">
         <OrbCore phase={phase} wakeEnabled={phase === 'idle'} wakeFlash={wakeFlash} templateColors={templateOrbColors} orbSize={orbSize} visualModel={orbVisualModel} />
@@ -349,14 +340,6 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         {phase === 'idle' && !hasSpeechAPI && (<p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>Wake word tidak didukung browser ini</p>)}
         {phase === 'idle' && hasSpeechAPI && (<p className="text-[11px] tracking-[0.1em] text-[#1e2a4a]/30" style={{ fontFamily: "'DM Mono', monospace" }}>{aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}</p>)}
         {phase === 'speaking'   && (<p className="text-[12px] tracking-[0.1em] text-[#b8a898]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>Cenna menyapa…</p>)}
-        {phase === 'listening'  && (
-          <>
-            <p className="text-[12px] tracking-[0.1em] text-[#7F77DD]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>Mendengarkan — jeda 3 detik untuk diproses</p>
-            {/* BUG-10 FIX: gunakan React state missingFields, bukan module variable */}
-            {missingFields.length > 0 && (<p className="text-[10px] tracking-[0.08em] text-[#7F77DD]/50" style={{ fontFamily: "'DM Mono', monospace" }}>perlu: {missingFields.slice(0, 3).join(', ')}{missingFields.length > 3 ? ` +${missingFields.length - 3}` : ''}</p>)}
-
-          </>
-        )}
         {phase === 'processing' && (<p className="text-[12px] tracking-[0.1em]" style={{ fontFamily: "'DM Mono', monospace", color: '#7F77DD', animation: 'fadeIn 0.3s ease' }}>{aiLabel}</p>)}
         {phase === 'responding' && (<p className="text-[12px] tracking-[0.1em] text-[#10b981]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.3s ease' }}>Cenna merespons…</p>)}
       </div>
