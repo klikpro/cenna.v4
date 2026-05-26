@@ -62,7 +62,7 @@ export default function Login({ onLoginSuccess, onBackClick }: LoginProps) {
         <div className="w-full bg-[#f8f5f0] text-[#111827] rounded-3xl p-8 shadow-2xl backdrop-blur-md border border-white/10">
           <h1 className="text-2xl font-serif text-[#111827] mb-2 font-bold">Selamat Datang</h1>
           <p className="text-xs text-[#1e2a4a]/60 mb-8 leading-relaxed">
-            Masuk ke panel administrasi CENNA AI untuk mengelola konfigurasi, obat, dan data login sistem.
+            Masuk ke panel administrasi CENNA AI untuk mengelola konfigurasi AI, pengaturan suara, dan data login sistem.
           </p>
 
           <form onSubmit={handleLogin} className="space-y-5">

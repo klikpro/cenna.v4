@@ -171,9 +171,9 @@ export function useAmbientListener({ enabled, silenceMs = 3000, onData }: Ambien
   const fireSilence = useCallback(() => {
     const raw = transcriptRef.current.trim();
     if (!raw) return;
-    const entities = extractEntities(raw);
+    const { keluhan } = extractEntities(raw);
     console.log('[Cenna ambient] firing — transcript:', raw.slice(0, 80));
-    onDataRef.current({ transcript: raw, keluhan: entities.keluhan, obat: entities.obat, pertanyaan: entities.pertanyaan, waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) });
+    onDataRef.current({ transcript: raw, keluhan, waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) });
     transcriptRef.current = '';
   }, []);
 
@@ -267,8 +267,8 @@ export function useMobileAmbientListener({ enabled, silenceMs = 2500, onData }: 
       const { text } = await res.json() as { text?: string };
       if (!text?.trim()) return;
       console.log('[Mobile STT] Whisper ✓ transcript:', text.trim().slice(0, 80));
-      const entities = extractEntities(text.trim());
-      onDataRef.current({ transcript: text.trim(), keluhan: entities.keluhan, obat: entities.obat, pertanyaan: entities.pertanyaan, waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) });
+      const { keluhan } = extractEntities(text.trim());
+      onDataRef.current({ transcript: text.trim(), keluhan, waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) });
     } catch (e) { console.warn('[Mobile STT] fetch error:', e); }
   }, []);
 

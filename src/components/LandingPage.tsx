@@ -21,7 +21,7 @@ import {
 } from './landing/ai-engine';
 import { useWakeWord, useAmbientListener, useMobileAmbientListener, emergencyStopAllMic } from './landing/stt-hooks';
 import { OrbCore, useOrbCanvas, StatusPill, type OrbPhase, type OrbVisualModel } from './landing/orb-canvas';
-import { ConclusionPopup, DataPopup } from './landing/session-popup';
+import { ConclusionPopup } from './landing/session-popup';
 
 // ─── Re-exports untuk backward-compatibility (App.tsx masih import dari sini)
 export { emergencyStopAllMic } from './landing/stt-hooks';
@@ -30,15 +30,22 @@ export { emergencyStopAllMic } from './landing/stt-hooks';
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface LandingPageProps { onLoginClick: () => void; }
 
-// ─── Helper (di luar komponen, tidak re-created tiap render) ─────────────────
-function mergeSessionData(all: CapturedData[]): CapturedData {
-  return {
-    transcript: all.map(d => d.transcript).join(' — '),
-    keluhan:    Array.from(new Set(all.flatMap(d => d.keluhan))),
-    obat:       Array.from(new Set(all.flatMap(d => d.obat))),
-    pertanyaan: Array.from(new Set(all.flatMap(d => d.pertanyaan))),
-    waktu:      all[0]?.waktu ?? '',
-  };
+// ─── buildConclusionTTS — rangkuman klinis untuk dibacakan TTS ───────────────
+function buildConclusionTTS(c: ClinicalConclusion, redFlags: string[]): string {
+  const parts: string[] = [];
+  if (c.diagnosis_utama)
+    parts.push(`Diagnosis utama yang saya pertimbangkan adalah ${c.diagnosis_utama}.`);
+  if (c.prognosis)
+    parts.push(c.prognosis);
+  const farma = c.tatalaksana.find(t => t.kategori === 'farmakologi');
+  if (farma?.detail)
+    parts.push(`Untuk tatalaksana, ${farma.detail.slice(0, 120)}.`);
+  if (redFlags.length > 0)
+    parts.push(`Perlu perhatian: terdapat tanda bahaya yang harus segera ditindaklanjuti.`);
+  if (c.edukasi.length > 0)
+    parts.push(c.edukasi[0].slice(0, 100));
+  parts.push('Ringkasan lengkap sudah saya tampilkan di layar, dokter.');
+  return parts.join(' ');
 }
 
 
@@ -48,7 +55,6 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   const [phase,          setPhase]          = useState<OrbPhase>('idle');
   const [wakeFlash,      setWakeFlash]      = useState(false);
-  const [capturedData,   setCapturedData]   = useState<CapturedData | null>(null);
   const [conclusionData, setConclusionData] = useState<ClinicalConclusion | null>(null);
   const [redFlagsData,   setRedFlagsData]   = useState<string[]>([]);
   const [aiLabel,        setAiLabel]        = useState('Cenna sedang berpikir…');
@@ -182,11 +188,11 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       return;
     }
 
-    // Mode tanpa AI
+    // Mode tanpa AI — speak selesai langsung idle, tidak ada popup
     if (!aiEnabled) {
       sessionDataRef.current.push(data);
       setPhase('responding');
-      speak('Baik dokter, data percakapan sudah saya catat.', () => { setCapturedData(mergeSessionData(sessionDataRef.current)); setPhase('popup'); });
+      speak('Baik dokter, percakapan sudah saya catat. Sesi selesai.', () => setPhase('idle'));
       return;
     }
 
@@ -203,7 +209,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       const aiResult       = await Promise.race([callCennaAI(data.transcript, currentHistory.slice(0, -1), currentRound), timeoutPromise]);
       currentHistory.push({ role: 'assistant', content: aiResult.voice_response });
 
-      const enrichedData: CapturedData = { ...data, keluhan: aiResult.keluhan.length ? aiResult.keluhan : data.keluhan, obat: aiResult.obat.length ? aiResult.obat : data.obat, pertanyaan: aiResult.pertanyaan.length ? aiResult.pertanyaan : data.pertanyaan };
+      const enrichedData: CapturedData = { ...data, keluhan: aiResult.keluhan.length ? aiResult.keluhan : data.keluhan };
       sessionDataRef.current.push(enrichedData);
       // BUG-10 FIX: sync missingFields ke React state agar UI reaktif
       setMissingFields([...aiResult.anamnesis.missing_fields]);
@@ -218,12 +224,33 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       console.debug('[CENNA:LandingPage] roundsDone:', roundsDone, '| isSessionEnd:', isSessionEnd);
 
       if (isSessionEnd) {
+        // Simpan sesi ke DB (tanpa keluhan/obat/doctor_name — sudah di-cleanup)
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
-        // BUG-N6 FIX: sertakan doctor_name dari sesi admin yang tersimpan
-        let doctorName = '';
-        try { doctorName = JSON.parse(sessionStorage.getItem('cenna_admin') || '{}').name || ''; } catch { /* ignore */ }
-        sbSaveSession({ id: sessionId, created_at: new Date().toISOString(), doctor_name: doctorName || undefined, anamnesis: aiResult.anamnesis, conclusion: aiResult.conclusion, red_flags: aiResult.red_flags, transcript_full: sessionDataRef.current.map(d => d.transcript).join(' — '), keluhan: Array.from(new Set(sessionDataRef.current.flatMap(d => d.keluhan))), obat: Array.from(new Set(sessionDataRef.current.flatMap(d => d.obat))), session_rounds: Math.ceil(currentHistory.length / 2) }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
-        speak(aiResult.voice_response, () => { if (aiResult.conclusion) { setConclusionData(aiResult.conclusion); setRedFlagsData(aiResult.red_flags); } setCapturedData(mergeSessionData(sessionDataRef.current)); setPhase('popup'); });
+        sbSaveSession({
+          id: sessionId,
+          created_at: new Date().toISOString(),
+          anamnesis:      aiResult.anamnesis,
+          conclusion:     aiResult.conclusion,
+          red_flags:      aiResult.red_flags,
+          transcript_full: sessionDataRef.current.map(d => d.transcript).join(' — '),
+          session_rounds: Math.ceil(currentHistory.length / 2),
+        }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
+
+        if (aiResult.conclusion && hasValidConclusion) {
+          // Ucapkan voice_response AI → tampilkan popup → bacakan ringkasan TTS
+          speak(aiResult.voice_response, () => {
+            setConclusionData(aiResult.conclusion!);
+            setRedFlagsData(aiResult.red_flags);
+            setPhase('popup');
+            const ttsText = buildConclusionTTS(aiResult.conclusion!, aiResult.red_flags);
+            setTimeout(() => speak(ttsText, () => {}), 500);
+          });
+        } else {
+          // Tidak ada kesimpulan (user paksa akhiri) — langsung idle
+          speak(aiResult.voice_response, () =>
+            speak('Sesi telah selesai. Terima kasih, dokter.', () => setPhase('idle'))
+          );
+        }
       } else {
         speak(aiResult.voice_response, () => setPhase('listening'));
       }
@@ -240,9 +267,9 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   useMobileAmbientListener({ enabled: phase === 'listening' && isMobile, silenceMs: 2500, onData: handleAmbientData });
 
   // BUG-M3 FIX: reset semua template visual state agar badge tidak tertinggal
-  const handleClosePopup = () => { setCapturedData(null); setConclusionData(null); setRedFlagsData([]); conversationHistoryRef.current = []; sessionDataRef.current = []; resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
-  const handleEndConversation = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setCapturedData(null); setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
-  const handleSOAP = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setCapturedData(null); setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); onLoginClick(); };
+  const handleClosePopup = () => { setConclusionData(null); setRedFlagsData([]); conversationHistoryRef.current = []; sessionDataRef.current = []; resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
+  const handleEndConversation = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); firedRef.current = false; setTemplateOrbColors(null); setTemplateModeName(null); setUiStepIndex(0); setPhase('idle'); };
+  const handleSOAP = () => { conversationHistoryRef.current = []; sessionDataRef.current = []; setConclusionData(null); setRedFlagsData([]); resetAnamnesisState(); onLoginClick(); };
 
   return (
     <div className="relative min-h-screen w-full bg-white overflow-hidden flex flex-col items-center justify-center select-none">
@@ -335,13 +362,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         )}
       </div>
 
-      {phase === 'popup' && capturedData && conclusionData && (
+      {phase === 'popup' && conclusionData && (
         <ConclusionPopup conclusion={conclusionData} anamnesis={_currentAnamnesis} redFlags={redFlagsData} onClose={handleClosePopup} onSOAP={handleSOAP} />
-      )}
-      {phase === 'popup' && capturedData && !conclusionData && (
-        <DataPopup data={capturedData} onClose={handleClosePopup} onSOAP={handleSOAP}
-          canContinue={conversationHistoryRef.current!.length > 0 && conversationHistoryRef.current!.length < 10}
-          onContinue={() => { setCapturedData(null); setPhase('listening'); }} />
       )}
 
       <style>{`

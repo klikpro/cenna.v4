@@ -270,13 +270,12 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
     if (confirm('Yakin ingin mereset seluruh prompt system dan parameter behavior ke default?')) {
       // BUG-H2 FIX: Reset SEMUA konfigurasi AI termasuk prompt_anamnesis dan reasoning_config
       await sbSetSetting('ai_behavior', null);
-      await sbSetSetting('prompt_anamnesis', null);  // ← sebelumnya terlewat
+      await sbSetSetting('prompt_anamnesis', null);
       await sbSetSetting('prompt_core', null);
       await sbSetSetting('prompt_soap', null);
       await sbSetSetting('prompt_redflag', null);
-      await sbSetSetting('prompt_medication', null);
-      await sbSetSetting('reasoning_config', null);  // ← sebelumnya terlewat
-      await sbAddLog('warning', 'SYSTEM', 'Reset seluruh konfigurasi AI ke default (termasuk prompt_anamnesis & reasoning_config).');
+      await sbSetSetting('reasoning_config', null);
+      await sbAddLog('warning', 'SYSTEM', 'Reset seluruh konfigurasi AI ke default.');
       alert('Aturan AI bertenaga spesialis konsultan telah dikembalikan ke bawaan pabrik.');
       window.location.reload();
     }
@@ -803,7 +802,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
 
               <div className="py-3">
                 <h4 className="font-semibold text-slate-800 text-xs mb-1">Hapus Data & Cache Browser</h4>
-                <p className="text-[11px] text-slate-400 mb-2 leading-relaxed">Hapus local storage, daftar dokter, dan rekap obat manual di device ini.</p>
+                <p className="text-[11px] text-slate-400 mb-2 leading-relaxed">Hapus local storage dan semua cache sementara di device ini.</p>
                 <button
                   id="btn-danger-clear-cache"
                   onClick={handleClearCache}

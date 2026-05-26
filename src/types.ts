@@ -125,23 +125,18 @@ export interface AnamnesisData {
 export interface CennaSession {
   id: string;
   created_at: string;
-  doctor_name?: string;
   anamnesis: AnamnesisData;
   conclusion: ClinicalConclusion | null;
   red_flags: string[];
   transcript_full: string;
-  keluhan: string[];
-  obat: string[];
   session_rounds: number;
 }
 
 /** Kesimpulan klinis yang dihasilkan CENNA setelah anamnesis lengkap */
 export interface ClinicalConclusion {
   diagnosis_utama: string;
-  icd10_code: string;
   diagnosis_banding: Array<{
     diagnosis: string;
-    icd10: string;
     probabilitas: string;
     alasan: string;
   }>;

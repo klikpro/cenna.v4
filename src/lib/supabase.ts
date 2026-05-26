@@ -120,10 +120,10 @@ Tugasmu adalah menggali anamnesis secara sistematis mengikuti kerangka PQRST, RP
 - RPS: Merokok? Alkohol? Pekerjaan? Aktivitas fisik? Alergi obat?
 
 == FORMAT OUTPUT WAJIB JSON ==
-{"voice_response":"<1-3 kalimat TTS>","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":["field yg belum tergali"],"phase":"gathering","keluhan":[],"obat":[],"pertanyaan":[],"red_flags":[],"conclusion":null,"session_end":false}
+{"voice_response":"<1-3 kalimat TTS>","anamnesis":{"provokasi":"","kualitas":"","radiasi":"","skala":"","waktu":"","rpd":"","rpk":"","rps":"","pemfis":""},"missing_fields":["field yg belum tergali"],"phase":"gathering","keluhan":[],"red_flags":[],"conclusion":null,"session_end":false}
 
 Saat phase "complete":
-{"diagnosis_utama":"","icd10_code":"","diagnosis_banding":[{"diagnosis":"","icd10":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
+{"diagnosis_utama":"","diagnosis_banding":[{"diagnosis":"","probabilitas":"","alasan":""}],"tatalaksana":[{"kategori":"farmakologi","detail":""},{"kategori":"non-farmakologi","detail":""}],"edukasi":[],"red_flags":[],"prognosis":""}`;
 
 export const DEFAULT_PROMPT_CORE = `Kamu adalah CENNA AI, asisten klinis medis berbasis AI untuk membantu dokter di klinik.
 
@@ -139,7 +139,8 @@ export const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan g
 
 export const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
 
-export const DEFAULT_PROMPT_MEDICATION = `Evaluasi keamanan regimen obat berikut:\n\nObat yang diresepkan: {{medications}}\nRiwayat alergi: {{allergies}}\nKondisi komorbid: {{comorbidities}}\n\nCek:\n1. Interaksi obat-obat (DDI)\n2. Kontraindikasi komorbid\n3. Kategori kehamilan\n\nOutput JSON: { "safe": true, "warnings": [], "suggestions": [] }`;
+// DEFAULT_PROMPT_MEDICATION dihapus — tidak relevan untuk voice assistant
+// Cenna bukan aplikasi manajemen obat, tidak perlu evaluasi drug interaction
 
 export const DEFAULT_REASONING_CONFIG = {
   framework: 'hypothetico-deductive',
@@ -334,9 +335,9 @@ export async function sbAddLog(
 }
 
 // —— CENNA SESSIONS ————————————————————————————————————————————————————————————
-// Tabel: cenna_sessions (id TEXT PK, created_at TIMESTAMPTZ, doctor_name TEXT,
+// Tabel: cenna_sessions (id TEXT PK, created_at TIMESTAMPTZ,
 //   anamnesis JSONB, conclusion JSONB, red_flags JSONB, transcript_full TEXT,
-//   keluhan JSONB, obat JSONB, session_rounds INT)
+//   session_rounds INT)
 
 export async function sbSaveSession(session: CennaSession): Promise<void> {
   const client = getSupabaseClient();

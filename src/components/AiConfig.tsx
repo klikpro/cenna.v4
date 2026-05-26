@@ -11,7 +11,6 @@ import {
   DEFAULT_PROMPT_CORE,
   DEFAULT_PROMPT_SOAP,
   DEFAULT_PROMPT_REDFLAG,
-  DEFAULT_PROMPT_MEDICATION,
   DEFAULT_AI_BEHAVIOR,
   DEFAULT_REASONING_CONFIG,
 } from '../lib/supabase';
@@ -56,8 +55,6 @@ export default function AiConfig() {
   const [promptCore, setPromptCore] = useState('');
   const [promptSoap, setPromptSoap] = useState('');
   const [promptRedflag, setPromptRedflag] = useState('');
-  const [promptMedication, setPromptMedication] = useState('');
-
   // 3. Reasoning State
   const [framework, setFramework] = useState(DEFAULT_REASONING_CONFIG.framework);
   const [evidenceLevel, setEvidenceLevel] = useState(DEFAULT_REASONING_CONFIG.evidenceLevel);
@@ -85,9 +82,6 @@ export default function AiConfig() {
 
       const dbRedflag = await sbGetSetting<string>('prompt_redflag');
       setPromptRedflag(dbRedflag || DEFAULT_PROMPT_REDFLAG);
-
-      const dbMedication = await sbGetSetting<string>('prompt_medication');
-      setPromptMedication(dbMedication || DEFAULT_PROMPT_MEDICATION);
 
       // --- Behavior: dari Supabase ---
       const dbBehavior = await sbGetSetting<AIBehaviorSettings>('ai_behavior');
@@ -148,7 +142,6 @@ export default function AiConfig() {
       sbSetSetting('prompt_core', promptCore),
       sbSetSetting('prompt_soap', promptSoap),
       sbSetSetting('prompt_redflag', promptRedflag),
-      sbSetSetting('prompt_medication', promptMedication),
     ]);
     await sbAddLog('success', 'SYSTEM', 'Memperbarui database template prompt utama AI.');
     alert('Seluruh kustomisasi prompt berhasil diperbarui ke database!');
@@ -187,7 +180,7 @@ export default function AiConfig() {
     setSandboxOutput(`⏳ CENNA AI menganalisis dengan ${activeProviderDef.icon} ${activeProviderDef.name}...\n\n`);
 
     try {
-      const systemPrompt = 'Kamu adalah CENNA AI asisten klinis medis berbasis AI. Analisis setiap kasus dengan metodologi evidence-based medicine, gunakan terminologi medis Indonesia (IDI/PAPDI). Selalu sertakan kode ICD-10 yang relevan.';
+      const systemPrompt = 'Kamu adalah CENNA AI, asisten klinis suara berbasis AI. Analisis setiap kasus dengan metodologi evidence-based medicine, gunakan terminologi medis Indonesia (IDI/PAPDI). Berikan kesimpulan klinis yang jelas dan actionable.';
       const actionPrompt = sandboxMode === 'soap'
         ? 'Buatkan resume SOAP Note klinis detail dan komprehensif'
         : sandboxMode === 'ddx'
@@ -205,7 +198,7 @@ export default function AiConfig() {
         if (sandboxMode === 'soap') {
           mockRes = `=========================================================\nCENNA GENERATED SOAP NOTE (Simulated — Offline Mode)\n=========================================================\n\n[SUBJECTIVE]\n- Keluhan Utama: Terdeteksi dari skenario transcript.\n- Gejala Penyerta: Mual, demam, penurunan nafsu makan.\n\n[OBJECTIVE]\n- Kesadaran: Compos Mentis (CM)\n\n[ASSESSMENT]\n- DDx: (1) Diagnosis utama 75%, (2) Alternatif 20%, (3) Lainnya 5%\n\n[PLAN]\n- Observasi tanda bahaya / Red Flag\n- Kontrol dalam 3 hari jika tidak membaik\n\n⚙️ Konfigurasi AI Provider di tab "API & Integrasi" untuk analisis real-time!\nProvider tersedia: ${AI_PROVIDERS.map(p => p.icon + ' ' + p.name).join(', ')}`;
         } else if (sandboxMode === 'ddx') {
-          mockRes = `{\n  "differential_diagnoses": [\n    {\n      "icd10": "J06.9",\n      "diagnosis": "ISPA Non-Spesifik",\n      "probability": "70%",\n      "evidence": "Gejala klinis sesuai pola infeksi saluran napas atas"\n    }\n  ],\n  "note": "⚙️ Konfigurasi API Key untuk analisis DDx real-time"\n}`;
+          mockRes = `{\n  "differential_diagnoses": [\n    {\n      "diagnosis": "ISPA Non-Spesifik",\n      "probability": "70%",\n      "evidence": "Gejala klinis sesuai pola infeksi saluran napas atas"\n    }\n  ],\n  "note": "⚙️ Konfigurasi API Key untuk analisis DDx real-time"\n}`;
         } else {
           mockRes = `{\n  "red_flags": ["Perlu evaluasi lebih lanjut"],\n  "urgency_level": "medium",\n  "recommended_action": "⚙️ Konfigurasi API Key untuk deteksi Red Flag real-time",\n  "available_providers": [${AI_PROVIDERS.map(p => `"${p.name}"`).join(', ')}]\n}`;
         }
@@ -218,9 +211,6 @@ export default function AiConfig() {
     }
   };
 
-  const handleInsertTag = (tag: string) => {
-    setPromptCore((prev) => prev + ` ${tag}`);
-  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -475,7 +465,7 @@ export default function AiConfig() {
             <h4 className="text-xs font-bold text-emerald-800">📋 Output yang dihasilkan CENNA (disimpan ke database tiap sesi)</h4>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px]">
               {[
-                '✅ Diagnosa Utama + ICD-10',
+                '✅ Diagnosa Utama',
                 '✅ Diagnosis Banding (DDx)',
                 '✅ Tatalaksana Farmakologi',
                 '✅ Tatalaksana Non-Farmakologi',
@@ -513,13 +503,14 @@ export default function AiConfig() {
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
                 Core Identity Prompt (Rujukan cara berpikir dasar)
               </label>
+              {/* Template tags hanya untuk SOAP prompt yang pakai {{transcript}} dan {{soap_history}} */}
               <div className="flex gap-2 flex-wrap pb-1">
-                {['{{doctor_name}}', '{{specialization}}', '{{clinic_name}}', '{{transcript}}'].map((tag) => (
+                {['{{transcript}}'].map((tag) => (
                   <button
                     key={tag}
                     id={`btn-insert-tag-${tag}`}
                     type="button"
-                    onClick={() => handleInsertTag(tag)}
+                    onClick={() => setPromptCore(prev => prev + ` ${tag}`)}
                     className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 border-none text-[10px] text-slate-600 font-mono cursor-pointer"
                   >
                     {tag}

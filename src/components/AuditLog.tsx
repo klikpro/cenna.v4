@@ -119,11 +119,11 @@ export default function AuditLog({ logs, onClearLogs }: AuditLogProps) {
         >
           <option value="">Semua Kategori</option>
           <option value="AUTH">Auth System</option>
-          <option value="DRUG">Medication Safety</option>
           <option value="SOAP">SOAP Notes</option>
           <option value="AI">AI Decision</option>
-          <option value="DOCTOR">Doctor Profile</option>
           <option value="SYSTEM">System Log</option>
+          <option value="INTEGRATION">Integration</option>
+          <option value="TEMPLATE">Template</option>
         </select>
 
         <button

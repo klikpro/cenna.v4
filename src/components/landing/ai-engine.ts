@@ -13,9 +13,7 @@ import type { AnamnesisData, ClinicalConclusion, ConversationTemplate } from '..
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface CapturedData {
   transcript: string;
-  keluhan:    string[];
-  obat:       string[];
-  pertanyaan: string[];
+  keluhan:    string[];   // untuk konteks AI anamnesis
   waktu:      string;
   anamnesis?: AnamnesisData;
   conclusion?: ClinicalConclusion | null;
@@ -84,7 +82,10 @@ export function matchesClosingWord(raw: string): boolean {
 const AI_CACHE_TTL = 5 * 60 * 1000;
 let _cachedAnamnesisPrompt:   string | null = null;
 let _cachedAnamnesisPromptTs: number = 0;
-let _cachedAiBehavior:   { ddxCount: number; profile: string; ddx: boolean; ebm: boolean } | null = null;
+let _cachedAiBehavior: {
+  ddxCount: number; profile: string; ddx: boolean; ebm: boolean;
+  uncertain: boolean; followup: boolean; edu: boolean; lang: string;
+} | null = null;
 let _cachedAiBehaviorTs: number = 0;
 
 // ─── Template mode state ──────────────────────────────────────────────────────
@@ -110,8 +111,11 @@ async function getAnamnesisPrompt(): Promise<string> {
 async function getAiBehavior() {
   const now = Date.now();
   if (_cachedAiBehavior !== null && now - _cachedAiBehaviorTs < AI_CACHE_TTL) return _cachedAiBehavior;
-  const db = await sbGetSetting<{ ddxCount: number; profile: string; ddx: boolean; ebm: boolean }>('ai_behavior');
-  _cachedAiBehavior   = db || { ddxCount: 3, profile: 'gp', ddx: true, ebm: true };
+  const db = await sbGetSetting<{
+    ddxCount: number; profile: string; ddx: boolean; ebm: boolean;
+    uncertain: boolean; followup: boolean; edu: boolean; lang: string;
+  }>('ai_behavior');
+  _cachedAiBehavior   = db || { ddxCount: 3, profile: 'gp', ddx: true, ebm: true, uncertain: true, followup: true, edu: true, lang: 'id' };
   _cachedAiBehaviorTs = now;
   console.log('[Cenna AI] AI behavior loaded from', db ? 'database' : 'default fallback');
   return _cachedAiBehavior;
@@ -181,27 +185,15 @@ export function fuzzyMatchTrigger(userSpeech: string, triggerText: string): bool
 }
 
 // ─── Entitas klinis ───────────────────────────────────────────────────────────
-function isQuestion(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  return (
-    t.endsWith('?') ||
-    /^(apakah|apa|bagaimana|berapa|kenapa|mengapa|kapan|di mana|siapa)\b/.test(t) ||
-    t.includes('ya dok') || t.includes('betul tidak') || t.includes('bisa tidak')
-  );
-}
-
-export function extractEntities(text: string): Pick<CapturedData, 'keluhan' | 'obat' | 'pertanyaan'> {
+export function extractEntities(text: string): Pick<CapturedData, 'keluhan'> {
   const sentences = text.split(/[.,;!?]+/).map(s => s.trim()).filter(Boolean);
   const keluhanKeywords = ['nyeri', 'sakit', 'pusing', 'mual', 'muntah', 'sesak', 'batuk', 'demam', 'lemas', 'lelah', 'gatal', 'bengkak', 'diare'];
-  const obatKeywords    = ['amlodipin', 'metformin', 'paracetamol', 'ibuprofen', 'amoksisilin', 'ranitidin', 'omeprazol', 'bisoprolol', 'captopril', 'atorvastatin', 'mg', 'tablet', 'kapsul', 'sirup'];
-  const keluhan: string[] = []; const obat: string[] = []; const pertanyaan: string[] = [];
+  const keluhan: string[] = [];
   sentences.forEach(s => {
     const sl = s.toLowerCase();
-    if (isQuestion(s) && s.length > 8) pertanyaan.push(s);
     if (keluhanKeywords.some(k => sl.includes(k))) keluhan.push(s);
-    if (obatKeywords.some(k => sl.includes(k)))    obat.push(s);
   });
-  return { keluhan, obat, pertanyaan };
+  return { keluhan };
 }
 
 // ─── callCennaAI ─────────────────────────────────────────────────────────────
@@ -210,15 +202,23 @@ export async function callCennaAI(
   history: Array<{ role: 'user'|'assistant'; content: string }>,
   roundNumber: number = 1,
 ): Promise<{
-  voice_response: string; keluhan: string[]; obat: string[]; pertanyaan: string[];
-  red_flags: string[]; anamnesis: AnamnesisData; conclusion: ClinicalConclusion | null; session_end: boolean;
+  voice_response: string;
+  keluhan: string[];
+  red_flags: string[];
+  anamnesis: AnamnesisData;
+  conclusion: ClinicalConclusion | null;
+  session_end: boolean;
 }> {
   const systemPrompt = await getAnamnesisPrompt();
   const behavior     = await getAiBehavior();
 
   const behaviorCtx = [
-    behavior.ddx    ? `- Sertakan ${behavior.ddxCount} diagnosis banding teratas dengan probabilitas.` : '- Jangan sertakan diagnosis banding.',
-    behavior.ebm    ? '- Gunakan pendekatan evidence-based medicine (EBM).' : '',
+    behavior.ddx     ? `- Sertakan ${behavior.ddxCount} diagnosis banding teratas dengan probabilitas.` : '- Jangan sertakan diagnosis banding.',
+    behavior.ebm     ? '- Gunakan pendekatan evidence-based medicine (EBM).' : '',
+    behavior.uncertain ? '- Nyatakan ketidakpastian klinis secara eksplisit jika data belum cukup.' : '',
+    behavior.followup  ? '- Sarankan rencana tindak lanjut yang jelas.' : '',
+    behavior.edu       ? '- Sertakan poin edukasi pasien yang relevan.' : '',
+    behavior.lang && behavior.lang !== 'id' ? `- Gunakan bahasa: ${behavior.lang}.` : '',
     behavior.profile === 'specialist' ? '- Berpikir seperti dokter SPESIALIS KONSULTAN.' : '',
     behavior.profile === 'emergency'  ? '- PRIORITASKAN red flag dan tatalaksana emergensi.' : '',
     behavior.profile === 'pediatric'  ? '- Perhatikan dosis dan pertimbangan khusus pasien anak.' : '',
@@ -264,10 +264,8 @@ export async function callCennaAI(
     return {
       voice_response: typeof parsed.voice_response === 'string' && parsed.voice_response.trim()
         ? parsed.voice_response.trim() : 'Data sudah dicatat, dokter.',
-      keluhan:    Array.isArray(parsed.keluhan)    ? parsed.keluhan    : [],
-      obat:       Array.isArray(parsed.obat)       ? parsed.obat       : [],
-      pertanyaan: Array.isArray(parsed.pertanyaan) ? parsed.pertanyaan : [],
-      red_flags:  Array.isArray(parsed.red_flags)  ? parsed.red_flags  : [],
+      keluhan:    Array.isArray(parsed.keluhan)   ? parsed.keluhan   : [],
+      red_flags:  Array.isArray(parsed.red_flags) ? parsed.red_flags : [],
       anamnesis:  { ..._currentAnamnesis },
       conclusion: hasValidConclusion ? parsed.conclusion : null,
       session_end: isComplete,
@@ -276,7 +274,7 @@ export async function callCennaAI(
     console.warn('[Cenna AI] JSON parse failed, raw:', cleaned.slice(0, 200));
     return {
       voice_response: 'Data percakapan sudah dicatat, dokter.',
-      keluhan: [], obat: [], pertanyaan: [], red_flags: [],
+      keluhan: [], red_flags: [],
       anamnesis: { ..._currentAnamnesis },
       conclusion: null,
       session_end: matchesClosingWord(transcript),
