@@ -63,7 +63,8 @@ export function matchesWakeWord(raw: string): boolean {
 }
 
 // ─── Closing patterns ─────────────────────────────────────────────────────────
-const CLOSING_PATTERNS = [
+// Default fallback — admin dapat override via DB key 'stt_closing_words'
+export const DEFAULT_CLOSING_PATTERNS = [
   'terima kasih cenna', 'terima kasih senna', 'terima kasih kena',
   'makasih cenna', 'makasih senna',
   'cukup cenna', 'cukup senna',
@@ -72,9 +73,23 @@ const CLOSING_PATTERNS = [
   'akhiri sesi', 'akhiri konsultasi',
 ];
 
+// Runtime patterns — diisi dari DB saat session dimulai
+let _runtimeClosingPatterns: string[] | null = null;
+let _closingPatternsCacheTs: number = 0;
+
+async function loadClosingPatterns(): Promise<void> {
+  const now = Date.now();
+  if (_runtimeClosingPatterns !== null && now - _closingPatternsCacheTs < AI_CACHE_TTL) return;
+  const db = await sbGetSetting<string[]>('stt_closing_words');
+  _runtimeClosingPatterns = (Array.isArray(db) && db.length > 0) ? db : DEFAULT_CLOSING_PATTERNS;
+  _closingPatternsCacheTs = now;
+  console.log('[Cenna AI] Closing patterns loaded from', (Array.isArray(db) && db.length > 0) ? 'database' : 'default fallback', ':', _runtimeClosingPatterns.length, 'patterns');
+}
+
 export function matchesClosingWord(raw: string): boolean {
   const t = normalizeText(raw);
-  return CLOSING_PATTERNS.some(p => t.includes(p));
+  const patterns = _runtimeClosingPatterns ?? DEFAULT_CLOSING_PATTERNS;
+  return patterns.some(p => t.includes(normalizeText(p)));
 }
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
@@ -172,6 +187,9 @@ export function resetAnamnesisState() {
   // Reset conclusion prompt cache juga
   _cachedConclusionPrompt   = null;
   _cachedConclusionPromptTs = 0;
+  // Reset closing patterns cache
+  _runtimeClosingPatterns   = null;
+  _closingPatternsCacheTs   = 0;
   _activeTemplate    = null;
   _templateStepIndex = 0;
   _templateDone      = false;
@@ -370,6 +388,9 @@ export async function handleWakeWordFlow(
   onTemplateColors: (c: { primary: string; secondary: string } | null) => void,
   onTemplateName: (n: string | null) => void,
 ) {
+  // Pre-load semua konfigurasi runtime sebelum sesi dimulai
+  await loadClosingPatterns();
+
   const greeting = await getWakeGreeting();
   const goListening = () => { console.log('[Cenna] → listening'); onPhase('listening'); };
 

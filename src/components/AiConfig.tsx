@@ -54,6 +54,7 @@ export default function AiConfig() {
   // 2. Prompts State
   const [promptAnamnesis, setPromptAnamnesis] = useState('');
   const [promptConclusion, setPromptConclusion] = useState('');
+  const [closingWordsText, setClosingWordsText] = useState('');
   const [promptCore, setPromptCore] = useState('');
   const [promptSoap, setPromptSoap] = useState('');
   const [promptRedflag, setPromptRedflag] = useState('');
@@ -78,6 +79,15 @@ export default function AiConfig() {
 
       const dbConclusion = await sbGetSetting<string>('prompt_conclusion');
       setPromptConclusion(dbConclusion || DEFAULT_PROMPT_CONCLUSION);
+
+      // Closing words
+      const dbClosingWords = await sbGetSetting<string[]>('stt_closing_words');
+      if (Array.isArray(dbClosingWords) && dbClosingWords.length > 0) {
+        setClosingWordsText(dbClosingWords.join('\n'));
+      } else {
+        // Default values
+        setClosingWordsText('terima kasih cenna\nmakasih cenna\ncukup cenna\nselesai cenna\nstop cenna\nakhiri sesi\nakhiri konsultasi');
+      }
 
       const dbCore = await sbGetSetting<string>('prompt_core');
       setPromptCore(dbCore || DEFAULT_PROMPT_CORE);
@@ -131,18 +141,24 @@ export default function AiConfig() {
   };
 
   const handleSaveAnamnesis = async () => {
+    const closingWords = closingWordsText
+      .split('\n')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
     await Promise.all([
       sbSetSetting('prompt_anamnesis', promptAnamnesis),
       sbSetSetting('prompt_conclusion', promptConclusion),
+      sbSetSetting('stt_closing_words', closingWords),
     ]);
-    await sbAddLog('success', 'SYSTEM', 'Prompt Anamnesis & Kesimpulan AI diperbarui.');
-    alert('Prompt Anamnesis dan Kesimpulan berhasil disimpan ke database!');
+    await sbAddLog('success', 'SYSTEM', `Prompt Anamnesis, Kesimpulan & ${closingWords.length} kata pengakhir diperbarui.`);
+    alert('Prompt Anamnesis, Kesimpulan, dan Kata Pengakhir berhasil disimpan ke database!');
   };
 
   const handleResetAnamnesis = () => {
-    if (confirm('Reset prompt anamnesis & kesimpulan ke default bawaan sistem?')) {
+    if (confirm('Reset prompt anamnesis, kesimpulan & kata pengakhir ke default bawaan sistem?')) {
       setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS);
       setPromptConclusion(DEFAULT_PROMPT_CONCLUSION);
+      setClosingWordsText('terima kasih cenna\nmakasih cenna\ncukup cenna\nselesai cenna\nstop cenna\nakhiri sesi\nakhiri konsultasi');
     }
   };
 
@@ -486,6 +502,44 @@ export default function AiConfig() {
               onChange={(e) => setPromptConclusion(e.target.value)}
               className="w-full p-4 bg-[#0d1a36] text-emerald-300 rounded-xl text-xs font-mono leading-relaxed outline-none focus:border-emerald-500 border border-emerald-900/30 resize-vertical"
             />
+          </div>
+
+          {/* Kata Pengakhir Sesi */}
+          <div className="border border-amber-200 bg-amber-50/60 rounded-2xl p-4 space-y-3 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-xs text-amber-800">🛑 Kata / Kalimat Pengakhir Sesi</h4>
+                <p className="text-[10px] text-amber-600/80 mt-0.5 leading-relaxed max-w-lg">
+                  Ketika dokter/pasien mengucapkan salah satu kata/kalimat ini, CENNA akan <strong>mengakhiri anamnesis</strong> dan langsung membuat kesimpulan klinis. Tulis satu kata/frasa per baris, huruf kecil.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-amber-800">
+                Kata/Kalimat Pemicu Akhir Sesi (satu per baris)
+              </label>
+              <textarea
+                id="closing-words-textarea"
+                rows={7}
+                value={closingWordsText}
+                onChange={(e) => setClosingWordsText(e.target.value)}
+                placeholder={'terima kasih cenna\nmakasih cenna\ncukup cenna\nselesai cenna\nstop cenna\nakhiri sesi\nakhiri konsultasi'}
+                className="w-full p-3 bg-white border border-amber-200 rounded-xl text-xs font-mono leading-relaxed outline-none focus:border-amber-400 resize-vertical text-slate-700"
+              />
+              {/* Live preview chips */}
+              {closingWordsText.trim() && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {closingWordsText.split('\n').map(s => s.trim().toLowerCase()).filter(Boolean).map((word, i) => (
+                    <span key={i} className="px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-800 rounded-full text-[10px] font-semibold">
+                      🎙️ &ldquo;{word}&rdquo;
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-[9px] text-amber-500">
+                💡 Tip: Sertakan variasi ejaan/pelafalan (contoh: "cukup cenna", "cukup sena"). CENNA menggunakan pencocokan fuzzy — ejaan tidak harus persis sama.
+              </p>
+            </div>
           </div>
 
           {/* Output fields yang dihasilkan */}

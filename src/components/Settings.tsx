@@ -272,6 +272,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       await sbSetSetting('ai_behavior', null);
       await sbSetSetting('prompt_anamnesis', null);
       await sbSetSetting('prompt_conclusion', null);
+      await sbSetSetting('stt_closing_words', null);
       await sbSetSetting('prompt_core', null);
       await sbSetSetting('prompt_soap', null);
       await sbSetSetting('prompt_redflag', null);
