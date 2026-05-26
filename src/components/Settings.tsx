@@ -271,6 +271,7 @@ export default function Settings({ onAdminProfileUpdated }: SettingsProps) {
       // BUG-H2 FIX: Reset SEMUA konfigurasi AI termasuk prompt_anamnesis dan reasoning_config
       await sbSetSetting('ai_behavior', null);
       await sbSetSetting('prompt_anamnesis', null);
+      await sbSetSetting('prompt_conclusion', null);
       await sbSetSetting('prompt_core', null);
       await sbSetSetting('prompt_soap', null);
       await sbSetSetting('prompt_redflag', null);

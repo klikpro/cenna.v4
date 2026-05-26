@@ -5,7 +5,7 @@
  * Dipecah dari LandingPage.tsx
  */
 
-import { sbGetSetting, DEFAULT_PROMPT_ANAMNESIS, sbGetActiveTemplate } from '../../lib/supabase';
+import { sbGetSetting, DEFAULT_PROMPT_ANAMNESIS, DEFAULT_PROMPT_CONCLUSION, sbGetActiveTemplate } from '../../lib/supabase';
 import { callActiveAI } from '../ApiSettings';
 import { speak } from './tts-engine';
 import type { AnamnesisData, ClinicalConclusion, ConversationTemplate } from '../../types';
@@ -88,6 +88,10 @@ let _cachedAiBehavior: {
 } | null = null;
 let _cachedAiBehaviorTs: number = 0;
 
+// Cache untuk conclusion prompt (terpisah dari anamnesis prompt)
+let _cachedConclusionPrompt:   string | null = null;
+let _cachedConclusionPromptTs: number = 0;
+
 // ─── Template mode state ──────────────────────────────────────────────────────
 export let _activeTemplate: ConversationTemplate | null = null;
 export let _templateStepIndex: number = 0;
@@ -121,6 +125,16 @@ async function getAiBehavior() {
   return _cachedAiBehavior;
 }
 
+async function getConclusionPrompt(): Promise<string> {
+  const now = Date.now();
+  if (_cachedConclusionPrompt !== null && now - _cachedConclusionPromptTs < AI_CACHE_TTL) return _cachedConclusionPrompt;
+  const db = await sbGetSetting<string>('prompt_conclusion');
+  _cachedConclusionPrompt   = db || DEFAULT_PROMPT_CONCLUSION;
+  _cachedConclusionPromptTs = now;
+  console.log('[Cenna AI] Prompt conclusion loaded from', db ? 'database' : 'default fallback');
+  return _cachedConclusionPrompt;
+}
+
 // ─── Anamnesis state (lintas ronde) ──────────────────────────────────────────
 export let _currentAnamnesis: AnamnesisData = {
   provokasi: '', kualitas: '', radiasi: '', skala: '', waktu: '',
@@ -151,10 +165,13 @@ export function resetAnamnesisState() {
     phase: 'gathering', missing_fields: [],
   };
   // BUG-H1 FIX: Reset cache timestamps agar prompt di-fetch ulang di sesi berikutnya
-  _cachedAnamnesisPrompt   = null;
-  _cachedAnamnesisPromptTs = 0;
-  _cachedAiBehavior        = null;
-  _cachedAiBehaviorTs      = 0;
+  _cachedAnamnesisPrompt    = null;
+  _cachedAnamnesisPromptTs  = 0;
+  _cachedAiBehavior         = null;
+  _cachedAiBehaviorTs       = 0;
+  // Reset conclusion prompt cache juga
+  _cachedConclusionPrompt   = null;
+  _cachedConclusionPromptTs = 0;
   _activeTemplate    = null;
   _templateStepIndex = 0;
   _templateDone      = false;
@@ -279,6 +296,65 @@ export async function callCennaAI(
       conclusion: null,
       session_end: matchesClosingWord(transcript),
     };
+  }
+}
+
+// ─── generateConclusion — Fase 2: Kesimpulan klinis dengan prompt khusus ──────
+// Dipanggil SEKALI setelah session_end:true, terpisah dari callCennaAI.
+// Menggunakan prompt_conclusion dari DB agar lebih fokus & akurat daripada
+// prompt anamnesis yang harus juga bertanya.
+export async function generateConclusion(
+  anamnesis: AnamnesisData,
+  fullTranscript: string,
+): Promise<{ conclusion: ClinicalConclusion; red_flags: string[] } | null> {
+  const systemPrompt = await getConclusionPrompt();
+  const behavior     = await getAiBehavior();
+
+  // Inject behavior context ke conclusion prompt juga
+  const behaviorCtx = [
+    behavior.ddx ? `- Sertakan ${behavior.ddxCount} diagnosis banding teratas.` : '- Tidak perlu diagnosis banding.',
+    behavior.ebm ? '- Gunakan pendekatan evidence-based medicine.' : '',
+    behavior.uncertain ? '- Nyatakan ketidakpastian jika data kurang.' : '',
+    behavior.edu ? '- Sertakan poin edukasi pasien.' : '',
+    behavior.profile === 'specialist' ? '- Analisis seperti SPESIALIS KONSULTAN.' : '',
+    behavior.profile === 'emergency'  ? '- PRIORITASKAN tatalaksana emergensi.' : '',
+    behavior.profile === 'pediatric'  ? '- Pertimbangkan dosis dan kondisi khusus anak.' : '',
+  ].filter(Boolean).join('\n');
+
+  const enrichedPrompt = behaviorCtx
+    ? `${systemPrompt}\n\n== INSTRUKSI PERILAKU ==\n${behaviorCtx}`
+    : systemPrompt;
+
+  const userMsg = [
+    `DATA ANAMNESIS PQRST:\n${JSON.stringify(anamnesis, null, 2)}`,
+    `\nTRANSKRIP PERCAKAPAN LENGKAP:\n"${fullTranscript}"`,
+    `\nBuat kesimpulan klinis dalam format JSON yang diminta. Hanya JSON, tidak ada teks lain.`,
+  ].join('\n');
+
+  console.log('[Cenna AI] generateConclusion — memanggil prompt_conclusion...');
+  const raw = await callActiveAI(enrichedPrompt, userMsg);
+  const cleaned = raw.replace(/```json|```/gi, '').replace(/[\u0000-\u001F\u007F]/g, ' ').trim();
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+
+  try {
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+    if (!parsed.diagnosis_utama || typeof parsed.diagnosis_utama !== 'string' || !parsed.diagnosis_utama.trim()) {
+      console.warn('[Cenna AI] generateConclusion: diagnosis_utama kosong, skip.');
+      return null;
+    }
+    const conclusion: ClinicalConclusion = {
+      diagnosis_utama:   parsed.diagnosis_utama.trim(),
+      diagnosis_banding: Array.isArray(parsed.diagnosis_banding) ? parsed.diagnosis_banding : [],
+      tatalaksana:       Array.isArray(parsed.tatalaksana)       ? parsed.tatalaksana       : [],
+      edukasi:           Array.isArray(parsed.edukasi)           ? parsed.edukasi           : [],
+      red_flags:         Array.isArray(parsed.red_flags)         ? parsed.red_flags         : [],
+      prognosis:         typeof parsed.prognosis === 'string'    ? parsed.prognosis         : '',
+    };
+    console.log('[Cenna AI] generateConclusion ✓ diagnosis:', conclusion.diagnosis_utama);
+    return { conclusion, red_flags: conclusion.red_flags };
+  } catch (e) {
+    console.warn('[Cenna AI] generateConclusion JSON parse failed:', cleaned.slice(0, 300));
+    return null;
   }
 }
 

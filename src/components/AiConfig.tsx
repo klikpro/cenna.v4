@@ -8,6 +8,7 @@ import { AIBehaviorSettings, SOAPConfig, ReasoningConfig } from '../types';
 import {
   sbGetSetting, sbSetSetting, sbAddLog,
   DEFAULT_PROMPT_ANAMNESIS,
+  DEFAULT_PROMPT_CONCLUSION,
   DEFAULT_PROMPT_CORE,
   DEFAULT_PROMPT_SOAP,
   DEFAULT_PROMPT_REDFLAG,
@@ -52,6 +53,7 @@ export default function AiConfig() {
 
   // 2. Prompts State
   const [promptAnamnesis, setPromptAnamnesis] = useState('');
+  const [promptConclusion, setPromptConclusion] = useState('');
   const [promptCore, setPromptCore] = useState('');
   const [promptSoap, setPromptSoap] = useState('');
   const [promptRedflag, setPromptRedflag] = useState('');
@@ -73,6 +75,9 @@ export default function AiConfig() {
       // --- Prompts: dari Supabase ---
       const dbAnamnesis = await sbGetSetting<string>('prompt_anamnesis');
       setPromptAnamnesis(dbAnamnesis || DEFAULT_PROMPT_ANAMNESIS);
+
+      const dbConclusion = await sbGetSetting<string>('prompt_conclusion');
+      setPromptConclusion(dbConclusion || DEFAULT_PROMPT_CONCLUSION);
 
       const dbCore = await sbGetSetting<string>('prompt_core');
       setPromptCore(dbCore || DEFAULT_PROMPT_CORE);
@@ -126,14 +131,18 @@ export default function AiConfig() {
   };
 
   const handleSaveAnamnesis = async () => {
-    await sbSetSetting('prompt_anamnesis', promptAnamnesis);
-    await sbAddLog('success', 'SYSTEM', 'Prompt Anamnesis PQRST AI diperbarui.');
-    alert('Prompt Anamnesis PQRST berhasil disimpan ke database!');
+    await Promise.all([
+      sbSetSetting('prompt_anamnesis', promptAnamnesis),
+      sbSetSetting('prompt_conclusion', promptConclusion),
+    ]);
+    await sbAddLog('success', 'SYSTEM', 'Prompt Anamnesis & Kesimpulan AI diperbarui.');
+    alert('Prompt Anamnesis dan Kesimpulan berhasil disimpan ke database!');
   };
 
   const handleResetAnamnesis = () => {
-    if (confirm('Reset prompt anamnesis ke default bawaan sistem?')) {
-      setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS); // langsung pakai konstanta dari supabase.ts
+    if (confirm('Reset prompt anamnesis & kesimpulan ke default bawaan sistem?')) {
+      setPromptAnamnesis(DEFAULT_PROMPT_ANAMNESIS);
+      setPromptConclusion(DEFAULT_PROMPT_CONCLUSION);
     }
   };
 
@@ -446,10 +455,10 @@ export default function AiConfig() {
 
           <div className="space-y-1">
             <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
-              System Prompt Anamnesis (disimpan ke database — digunakan oleh CENNA di Landing Page)
+              🔍 Fase 1 — Prompt Anamnesis (digunakan tiap ronde bertanya)
             </label>
             <p className="text-[10px] text-slate-400 mb-2">
-              Edit dengan hati-hati. Pastikan format output JSON tetap konsisten agar parsing tidak rusak.
+              Prompt ini dipanggil berulang setiap ronde suara. Fokus pada penggalian PQRST &amp; pertanyaan lanjutan. Pastikan format JSON output tetap konsisten.
             </p>
             <textarea
               id="prompt-anamnesis-textarea"
@@ -457,6 +466,25 @@ export default function AiConfig() {
               value={promptAnamnesis}
               onChange={(e) => setPromptAnamnesis(e.target.value)}
               className="w-full p-4 bg-[#0d1a36] text-[#94a8d8] rounded-xl text-xs font-mono leading-relaxed outline-none focus:border-[#3d5494] border border-[#1e2a4a]/12 resize-vertical"
+            />
+          </div>
+
+          <div className="space-y-1 pt-4 border-t border-slate-100">
+            <div className="flex items-center gap-2 mb-1">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#1e2a4a]">
+                🧠 Fase 2 — Prompt Kesimpulan Klinis (dipanggil SEKALI di akhir sesi)
+              </label>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[9px] font-bold">NEW</span>
+            </div>
+            <p className="text-[10px] text-slate-400 mb-2">
+              Prompt ini dipanggil <strong>satu kali</strong> setelah anamnesis selesai untuk menghasilkan diagnosis, DDx, tatalaksana, edukasi, dan prognosis. Lebih fokus dan analitik — dapat dituning lebih dalam dari prompt anamnesis.
+            </p>
+            <textarea
+              id="prompt-conclusion-textarea"
+              rows={16}
+              value={promptConclusion}
+              onChange={(e) => setPromptConclusion(e.target.value)}
+              className="w-full p-4 bg-[#0d1a36] text-emerald-300 rounded-xl text-xs font-mono leading-relaxed outline-none focus:border-emerald-500 border border-emerald-900/30 resize-vertical"
             />
           </div>
 

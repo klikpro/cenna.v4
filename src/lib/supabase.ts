@@ -139,6 +139,23 @@ export const DEFAULT_PROMPT_SOAP = `Analisis transcript percakapan berikut dan g
 
 export const DEFAULT_PROMPT_REDFLAG = `Evaluasi transcript klinis berikut untuk tanda-tanda BAHAYA yang memerlukan tindakan segera:\n\n{{transcript}}\n\nDeteksi:\n- Tanda stroke: FAST\n- Tanda ACS: nyeri dada menjalar, keringat dingin, sesak\n- Tanda sepsis: demam tinggi, takikardia, takipnea, hipotensi\n- Kondisi abdomen akut\n\nOutput JSON: { "red_flags": [], "urgency_level": "low|medium|high|critical", "recommended_action": "" }`;
 
+export const DEFAULT_PROMPT_CONCLUSION = `Kamu adalah CENNA AI — asisten klinis analitik untuk dokter Indonesia.
+Kamu menerima data anamnesis PQRST lengkap beserta transkrip percakapan dari sesi dokter-pasien.
+
+TUGAS: Buat kesimpulan klinis komprehensif berdasarkan SELURUH data yang diberikan.
+
+Pola pikir klinis:
+1. Analisis semua data PQRST secara sistematis — jangan lewatkan field manapun
+2. Pertimbangkan diagnosis banding berdasarkan pola gejala, riwayat, dan faktor risiko
+3. Identifikasi red flags yang memerlukan tindakan segera (darurat / rujukan spesialis)
+4. Susun tatalaksana yang spesifik, actionable, dan berbasis bukti (EBM)
+5. Buat poin edukasi yang relevan dan praktis untuk pasien
+
+CATATAN: Kamu HANYA membuat kesimpulan — jangan ajukan pertanyaan lagi.
+
+FORMAT OUTPUT WAJIB JSON (tidak ada teks lain di luar blok JSON):
+{"diagnosis_utama":"<diagnosis klinis utama yang paling mungkin>","diagnosis_banding":[{"diagnosis":"","probabilitas":"xx%","alasan":"<alasan klinis singkat>"}],"tatalaksana":[{"kategori":"farmakologi","detail":"<spesifik: jenis, dosis, frekuensi, durasi>"},{"kategori":"non-farmakologi","detail":""}],"edukasi":["<poin edukasi 1>","<poin edukasi 2>"],"red_flags":["<jika ada tanda bahaya>"],"prognosis":"<prognosis singkat dan jelas>"}`;
+
 // DEFAULT_PROMPT_MEDICATION dihapus — tidak relevan untuk voice assistant
 // Cenna bukan aplikasi manajemen obat, tidak perlu evaluasi drug interaction
 
@@ -354,6 +371,29 @@ export async function sbSaveSession(session: CennaSession): Promise<void> {
     // Jangan throw — gagal simpan tidak boleh crash UX landing page
   } else {
     console.info('[sbSaveSession] Session saved:', session.id);
+  }
+}
+
+/** Update kolom conclusion & red_flags pada sesi yang sudah tersimpan.
+ *  Dipanggil setelah generateConclusion() berhasil menghasilkan kesimpulan klinis. */
+export async function sbUpdateSessionConclusion(
+  sessionId: string,
+  conclusion: import('../types').ClinicalConclusion,
+  red_flags: string[],
+): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) {
+    console.warn('[sbUpdateSessionConclusion] Supabase tidak tersedia — conclusion tidak disimpan.');
+    return;
+  }
+  const { error } = await client
+    .from('cenna_sessions')
+    .update({ conclusion, red_flags })
+    .eq('id', sessionId);
+  if (error) {
+    console.error('[sbUpdateSessionConclusion] Failed:', error.message, error.code);
+  } else {
+    console.info('[sbUpdateSessionConclusion] Conclusion updated for session:', sessionId);
   }
 }
 

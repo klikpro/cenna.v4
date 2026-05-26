@@ -8,7 +8,7 @@
 import type { AnamnesisData, ClinicalConclusion } from '../types';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { sbGetSetting, sbSaveSession } from '../lib/supabase';
+import { sbGetSetting, sbSaveSession, sbUpdateSessionConclusion } from '../lib/supabase';
 
 // ─── Sub-modul ────────────────────────────────────────────────────────────────
 import { speak } from './landing/tts-engine';
@@ -16,7 +16,7 @@ import {
   callCennaAI, resetAnamnesisState, matchesClosingWord, fuzzyMatchTrigger,
   _currentAnamnesis, _activeTemplate, _templateStepIndex, _templateDone,
   setTemplateStepIndex, setTemplateDone,
-  handleWakeWordFlow,
+  handleWakeWordFlow, generateConclusion,
   type CapturedData,
 } from './landing/ai-engine';
 import { useWakeWord, useAmbientListener, useMobileAmbientListener, emergencyStopAllMic } from './landing/stt-hooks';
@@ -224,33 +224,51 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       console.debug('[CENNA:LandingPage] roundsDone:', roundsDone, '| isSessionEnd:', isSessionEnd);
 
       if (isSessionEnd) {
-        // Simpan sesi ke DB (tanpa keluhan/obat/doctor_name — sudah di-cleanup)
+        // Simpan sesi ke DB (conclusion di-update setelah generateConclusion)
         const sessionId = 'sess_' + Date.now() + Math.random().toString(36).substring(2, 6);
+        const fullTranscript = sessionDataRef.current.map(d => d.transcript).join(' — ');
         sbSaveSession({
           id: sessionId,
           created_at: new Date().toISOString(),
           anamnesis:      aiResult.anamnesis,
-          conclusion:     aiResult.conclusion,
+          conclusion:     null,            // akan diisi oleh generateConclusion
           red_flags:      aiResult.red_flags,
-          transcript_full: sessionDataRef.current.map(d => d.transcript).join(' — '),
+          transcript_full: fullTranscript,
           session_rounds: Math.ceil(currentHistory.length / 2),
         }).catch(err => console.warn('[Cenna] sbSaveSession failed:', err));
 
-        if (aiResult.conclusion && hasValidConclusion) {
-          // Ucapkan voice_response AI → tampilkan popup → bacakan ringkasan TTS
-          speak(aiResult.voice_response, () => {
-            setConclusionData(aiResult.conclusion!);
-            setRedFlagsData(aiResult.red_flags);
-            setPhase('popup');
-            const ttsText = buildConclusionTTS(aiResult.conclusion!, aiResult.red_flags);
-            setTimeout(() => speak(ttsText, () => {}), 500);
-          });
-        } else {
-          // Tidak ada kesimpulan (user paksa akhiri) — langsung idle
-          speak(aiResult.voice_response, () =>
-            speak('Sesi telah selesai. Terima kasih, dokter.', () => setPhase('idle'))
-          );
-        }
+        // Fase 1: ucapkan voice_response dari ronde gathering terakhir
+        speak(aiResult.voice_response, async () => {
+          // Fase 2: generate kesimpulan klinis dengan prompt khusus
+          setPhase('responding'); // tampilkan orb processing
+          console.log('[CENNA:LandingPage] Memanggil generateConclusion (phase 2)...');
+          try {
+            const conclusionResult = await generateConclusion(aiResult.anamnesis, fullTranscript);
+            if (conclusionResult) {
+              // Simpan conclusion ke DB (update session yang sudah disimpan)
+              sbUpdateSessionConclusion(sessionId, conclusionResult.conclusion, conclusionResult.red_flags)
+                .catch(e => console.warn('[CENNA] sbUpdateSessionConclusion failed:', e));
+              setConclusionData(conclusionResult.conclusion);
+              setRedFlagsData(conclusionResult.red_flags);
+              setPhase('popup');
+              const ttsText = buildConclusionTTS(conclusionResult.conclusion, conclusionResult.red_flags);
+              setTimeout(() => speak(ttsText, () => {}), 500);
+            } else if (aiResult.conclusion && hasValidConclusion) {
+              // Fallback: pakai conclusion dari gathering call jika generateConclusion gagal
+              console.warn('[CENNA] generateConclusion null — fallback ke aiResult.conclusion');
+              setConclusionData(aiResult.conclusion!);
+              setRedFlagsData(aiResult.red_flags);
+              setPhase('popup');
+              const ttsText = buildConclusionTTS(aiResult.conclusion!, aiResult.red_flags);
+              setTimeout(() => speak(ttsText, () => {}), 500);
+            } else {
+              speak('Sesi telah selesai. Terima kasih, dokter.', () => setPhase('idle'));
+            }
+          } catch (conclusionErr) {
+            console.warn('[CENNA] generateConclusion error:', conclusionErr);
+            speak('Sesi telah selesai. Terima kasih, dokter.', () => setPhase('idle'));
+          }
+        });
       } else {
         speak(aiResult.voice_response, () => setPhase('listening'));
       }
