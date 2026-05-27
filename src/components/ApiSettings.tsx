@@ -336,13 +336,19 @@ export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
   const provider   = AI_PROVIDERS.find(p => p.id === providerId) || AI_PROVIDERS[0];
   if (!AI_PROVIDERS.find(p => p.id === providerId)) console.warn('[CENNA:loadAiConfigFromDb] Provider tidak dikenali:', providerId, '— fallback ke', provider.id);
 
-  // Baca semua API key per-provider dari DB
+  // Baca semua API key per-provider dari DB (multi-key: rotasi berdasarkan waktu)
   const apiKeys: Record<string, string> = {};
   await Promise.all(
     AI_PROVIDERS.map(async p => {
       const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
-      if (k) { apiKeys[p.id] = k; console.debug(`[CENNA:loadAiConfigFromDb] API key ditemukan untuk: ${p.id}`); }
-      else console.warn(`[CENNA:loadAiConfigFromDb] API key KOSONG untuk: ${p.id}`);
+      if (k) {
+        // Multi-key: pilih key aktif via rotasi menit
+        const keyArr = k.split(',').map(x => x.trim()).filter(Boolean);
+        apiKeys[p.id] = keyArr.length > 1
+          ? keyArr[Math.floor(Date.now() / 60000) % keyArr.length]
+          : keyArr[0] || k;
+        console.debug(`[CENNA:loadAiConfigFromDb] API key ditemukan untuk: ${p.id} (${keyArr.length} key, aktif #${Math.floor(Date.now() / 60000) % keyArr.length + 1})`);
+      } else console.warn(`[CENNA:loadAiConfigFromDb] API key KOSONG untuk: ${p.id}`);
     })
   );
 
@@ -384,6 +390,74 @@ export async function callActiveAI(
   }
 }
 
+
+// ─── Reusable Multi-Key Input Component ──────────────────────────────────────
+interface MultiKeyInputProps {
+  keys: string[];
+  onChange: (keys: string[]) => void;
+  placeholder?: string;
+  label?: string;
+  type?: string;
+}
+function MultiKeyInput({ keys, onChange, placeholder = 'Masukkan API key...', label, type = 'password' }: MultiKeyInputProps) {
+  const safeKeys = keys.length ? keys : [''];
+  const addKey = () => onChange([...safeKeys, '']);
+  const removeKey = (i: number) => {
+    const next = safeKeys.filter((_, idx) => idx !== i);
+    onChange(next.length ? next : ['']);
+  };
+  const updateKey = (i: number, val: string) => {
+    const next = [...safeKeys];
+    next[i] = val;
+    onChange(next);
+  };
+  return (
+    <div className="space-y-2">
+      {label && <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">{label}</label>}
+      {safeKeys.map((k, i) => (
+        <div key={i} className="flex gap-2 items-center">
+          <div className="relative flex-1">
+            {safeKeys.length > 1 && (
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-bold text-[#1e2a4a]/30 pointer-events-none select-none">
+                #{i + 1}
+              </span>
+            )}
+            <input
+              type={type}
+              value={k}
+              onChange={e => updateKey(i, e.target.value)}
+              placeholder={placeholder}
+              className={`w-full py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a] ${safeKeys.length > 1 ? 'pl-8 pr-4' : 'px-4'}`}
+            />
+          </div>
+          {safeKeys.length > 1 && (
+            <button
+              type="button"
+              onClick={() => removeKey(i)}
+              className="w-8 h-8 flex items-center justify-center text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg border border-red-200 text-xs font-bold bg-white cursor-pointer flex-shrink-0"
+              title="Hapus key ini"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addKey}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold text-[#1e2a4a] border border-dashed border-[#1e2a4a]/30 rounded-lg hover:bg-[#1e2a4a]/5 cursor-pointer bg-transparent transition"
+      >
+        <span className="text-sm leading-none">+</span> Tambah API Key
+      </button>
+      {safeKeys.filter(k => k.trim()).length > 1 && (
+        <p className="text-[9px] text-slate-400">
+          ⚡ {safeKeys.filter(k => k.trim()).length} key tersimpan · rotasi otomatis tiap menit
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [activeTab, setActiveTab] = useState<'database' | 'ai' | 'stt'>('database');
@@ -397,31 +471,32 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
   // Multi-AI
   const [activeProvider, setActiveProvider] = useState('');
-  const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
+  // Multi-key: setiap provider menyimpan array of keys
+  const [providerKeys, setProviderKeys] = useState<Record<string, string[]>>({});
   const [aiModel, setAiModel] = useState('');
   const [aiTemp, setAiTemp] = useState(0.3);
   const [aiMaxTokens, setAiMaxTokens] = useState(2048);
   const [aiTestStatus, setAiTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
 
   // STT
-  const [sttKey, setSttKey] = useState('');
+  const [sttKeys, setSttKeys] = useState<string[]>(['']);
   const [sttProvider, setSttProvider] = useState('');
   const [sttLang, setSttLang] = useState('');
   // ElevenLabs
-  const [elevenLabsKey, setElevenLabsKey] = useState('');
+  const [elevenLabsKeys, setElevenLabsKeys] = useState<string[]>(['']);
   const [elevenVoiceId, setElevenVoiceId] = useState('');
   const [elevenSpeed,   setElevenSpeed]   = useState(1.0);
   const [elevenPreview, setElevenPreview] = useState<'idle'|'loading'|'playing'>('idle');
   // Google TTS
-  const [googleTtsKey,    setGoogleTtsKey]    = useState('');
+  const [googleTtsKeys,   setGoogleTtsKeys]   = useState<string[]>(['']);
   const [googleTtsVoice,  setGoogleTtsVoice]  = useState('');
   const [googleTtsRate,   setGoogleTtsRate]   = useState(1.0);
   // OpenAI TTS
-  const [openaiTtsKey,   setOpenaiTtsKey]   = useState('');
+  const [openaiTtsKeys,  setOpenaiTtsKeys]  = useState<string[]>(['']);
   const [openaiTtsVoice, setOpenaiTtsVoice] = useState('');
   const [openaiTtsModel, setOpenaiTtsModel] = useState('');
   // Azure TTS
-  const [azureTtsKey,    setAzureTtsKey]    = useState('');
+  const [azureTtsKeys,   setAzureTtsKeys]   = useState<string[]>(['']);
   const [azureTtsRegion, setAzureTtsRegion] = useState('');
   const [azureTtsVoice,  setAzureTtsVoice]  = useState('');
   const [azureTtsRate,   setAzureTtsRate]   = useState(1.0);
@@ -459,14 +534,17 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       if (!savedProvider) console.warn('[CENNA:loadSettings] ⚠️ AI provider belum dikonfigurasi di DB.');
       setActiveProvider(savedProvider);
 
-      // Load API keys semua provider
-      const keys: Record<string, string> = {};
+      // Load API keys semua provider (multi-key: disimpan koma-separated)
+      const keys: Record<string, string[]> = {};
       await Promise.all(
         AI_PROVIDERS.map(async p => {
           const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
-          keys[p.id] = k || '';
-          if (!k) console.warn(`[CENNA:loadSettings] ⚠️ API Key kosong untuk provider: ${p.id}`);
-          else console.debug(`[CENNA:loadSettings] ✓ API Key ada untuk: ${p.id}`);
+          if (!k) { keys[p.id] = ['']; console.warn(`[CENNA:loadSettings] ⚠️ API Key kosong untuk provider: ${p.id}`); }
+          else {
+            keys[p.id] = k.split(',').map((x: string) => x.trim()).filter(Boolean);
+            if (!keys[p.id].length) keys[p.id] = [''];
+            console.debug(`[CENNA:loadSettings] ✓ API Key(s) ada untuk: ${p.id} (${keys[p.id].length} key)`);
+          }
         })
       );
       setProviderKeys(keys);
@@ -490,7 +568,8 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       if (!dbSttConfig) console.warn('[CENNA:loadSettings] ⚠️ STT config belum dikonfigurasi di DB.');
       setSttProvider(dbSttConfig?.provider || '');
       setSttLang(dbSttConfig?.lang || '');
-      setSttKey(dbSttConfig?.sttKey || '');
+      const _sttRaw = dbSttConfig?.sttKey || '';
+      setSttKeys(_sttRaw ? _sttRaw.split(',').map((x: string) => x.trim()).filter(Boolean) : ['']);
 
       // ── ElevenLabs ──
       const elKey = await sbGetSetting<string>('ELEVENLABS_API_KEY');
@@ -499,22 +578,25 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       if (!elKey) console.warn('[CENNA:loadSettings] ⚠️ ELEVENLABS_API_KEY kosong.');
       if (!elVoice) console.warn('[CENNA:loadSettings] ⚠️ ELEVEN_VOICE_ID kosong.');
       console.debug('[CENNA:loadSettings] ElevenLabs — key:', elKey ? 'ada' : 'kosong', 'voice:', elVoice, 'speed:', elSpeed);
-      setElevenLabsKey(elKey || '');
+      setElevenLabsKeys(elKey ? elKey.split(',').map((x: string) => x.trim()).filter(Boolean) : ['']);
       setElevenVoiceId(elVoice || '');
       setElevenSpeed(elSpeed ?? 1.0);
 
       // ── Google TTS ──
-      setGoogleTtsKey((await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '');
+      const _gTts = (await sbGetSetting<string>('GOOGLE_TTS_KEY')) || '';
+      setGoogleTtsKeys(_gTts ? _gTts.split(',').map((x: string) => x.trim()).filter(Boolean) : ['']);
       setGoogleTtsVoice((await sbGetSetting<string>('GOOGLE_TTS_VOICE')) || '');
       setGoogleTtsRate((await sbGetSetting<number>('GOOGLE_TTS_RATE')) ?? 1.0);
 
       // ── OpenAI TTS ──
-      setOpenaiTtsKey((await sbGetSetting<string>('OPENAI_TTS_KEY')) || '');
+      const _oTts = (await sbGetSetting<string>('OPENAI_TTS_KEY')) || '';
+      setOpenaiTtsKeys(_oTts ? _oTts.split(',').map((x: string) => x.trim()).filter(Boolean) : ['']);
       setOpenaiTtsVoice((await sbGetSetting<string>('OPENAI_TTS_VOICE')) || '');
       setOpenaiTtsModel((await sbGetSetting<string>('OPENAI_TTS_MODEL')) || '');
 
       // ── Azure TTS ──
-      setAzureTtsKey((await sbGetSetting<string>('AZURE_TTS_KEY')) || '');
+      const _aTts = (await sbGetSetting<string>('AZURE_TTS_KEY')) || '';
+      setAzureTtsKeys(_aTts ? _aTts.split(',').map((x: string) => x.trim()).filter(Boolean) : ['']);
       setAzureTtsRegion((await sbGetSetting<string>('AZURE_TTS_REGION')) || '');
       setAzureTtsVoice((await sbGetSetting<string>('AZURE_TTS_VOICE')) || '');
       setAzureTtsRate((await sbGetSetting<number>('AZURE_TTS_RATE')) ?? 1.0);
@@ -607,15 +689,16 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
   const handleSaveAI = async () => {
     console.debug(`[CENNA:handleSaveAI] Provider: ${activeProvider}, Model: ${aiModel}, Temp: ${aiTemp}, MaxTokens: ${aiMaxTokens}`);
-    const key = providerKeys[activeProvider] || '';
-    if (!key.trim()) {
+    const keys = (providerKeys[activeProvider] || []).map(k => k.trim()).filter(Boolean);
+    if (!keys.length) {
       console.warn(`[CENNA:handleSaveAI] ⚠️ API Key ${currentProviderDef.name} kosong — simpan dibatalkan.`);
-      alert(`${currentProviderDef.name} API Key wajib diisi.`);
+      alert(`${currentProviderDef.name} API Key wajib diisi minimal satu.`);
       return;
     }
     try {
-      console.debug(`[CENNA:handleSaveAI] Menyimpan AI_KEY_${activeProvider.toUpperCase()} ke DB...`);
-      await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, key.trim());
+      const keyStr = keys.join(',');
+      console.debug(`[CENNA:handleSaveAI] Menyimpan AI_KEY_${activeProvider.toUpperCase()} ke DB (${keys.length} key)...`);
+      await sbSetSetting(`AI_KEY_${activeProvider.toUpperCase()}`, keyStr);
       console.debug('[CENNA:handleSaveAI] Menyimpan api_ai_config ke DB...');
       await sbSetSetting('api_ai_config', {
         provider: activeProvider,
@@ -637,7 +720,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
   const handleTestAI = async (pid: string) => {
     const pdef = AI_PROVIDERS.find(p => p.id === pid)!;
-    const key = providerKeys[pid] || '';
+    const key = (providerKeys[pid] || [''])[0] || '';
     console.debug(`[CENNA:handleTestAI] Menguji provider: ${pid}, model default: ${pdef.defaultModel}`);
     if (!key) {
       console.warn(`[CENNA:handleTestAI] ⚠️ API Key ${pdef.name} kosong — test dibatalkan.`);
@@ -672,25 +755,30 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const handleSaveSTT = async () => {
     console.debug('[CENNA:handleSaveSTT] Menyimpan konfigurasi STT/TTS...', { sttProvider, sttLang, ttsPrefProvider });
     try {
+      const _sttKeyStr = sttKeys.map(k => k.trim()).filter(Boolean).join(',');
       await sbSetSetting('api_stt_config', {
         provider: sttProvider,
         lang: sttLang,
-        sttKey: sttKey.trim(),
-        keyConfigured: !!sttKey.trim(),
+        sttKey: _sttKeyStr,
+        keyConfigured: !!_sttKeyStr,
         updatedAt: new Date().toISOString(),
       });
       console.debug('[CENNA:handleSaveSTT] ✅ api_stt_config tersimpan.');
-      await sbSetSetting('ELEVENLABS_API_KEY', elevenLabsKey.trim());
+      const _elKeyStr = elevenLabsKeys.map(k => k.trim()).filter(Boolean).join(',');
+      await sbSetSetting('ELEVENLABS_API_KEY', _elKeyStr);
       await sbSetSetting('ELEVEN_VOICE_ID', elevenVoiceId);
       await sbSetSetting('ELEVEN_SPEED', elevenSpeed);
-      console.debug('[CENNA:handleSaveSTT] ✅ ElevenLabs config tersimpan. Voice:', elevenVoiceId, 'Speed:', elevenSpeed);
-      await sbSetSetting('GOOGLE_TTS_KEY', googleTtsKey.trim());
+      console.debug('[CENNA:handleSaveSTT] ✅ ElevenLabs config tersimpan. Keys:', elevenLabsKeys.filter(k=>k.trim()).length, 'Voice:', elevenVoiceId, 'Speed:', elevenSpeed);
+      const _gTtsKeyStr = googleTtsKeys.map(k => k.trim()).filter(Boolean).join(',');
+      await sbSetSetting('GOOGLE_TTS_KEY', _gTtsKeyStr);
       await sbSetSetting('GOOGLE_TTS_VOICE', googleTtsVoice);
       await sbSetSetting('GOOGLE_TTS_RATE', googleTtsRate);
-      await sbSetSetting('OPENAI_TTS_KEY', openaiTtsKey.trim());
+      const _oTtsKeyStr = openaiTtsKeys.map(k => k.trim()).filter(Boolean).join(',');
+      await sbSetSetting('OPENAI_TTS_KEY', _oTtsKeyStr);
       await sbSetSetting('OPENAI_TTS_VOICE', openaiTtsVoice);
       await sbSetSetting('OPENAI_TTS_MODEL', openaiTtsModel);
-      await sbSetSetting('AZURE_TTS_KEY', azureTtsKey.trim());
+      const _aTtsKeyStr = azureTtsKeys.map(k => k.trim()).filter(Boolean).join(',');
+      await sbSetSetting('AZURE_TTS_KEY', _aTtsKeyStr);
       await sbSetSetting('AZURE_TTS_REGION', azureTtsRegion);
       await sbSetSetting('AZURE_TTS_VOICE', azureTtsVoice);
       await sbSetSetting('AZURE_TTS_RATE', azureTtsRate);
@@ -821,7 +909,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {AI_PROVIDERS.map(p => {
-                const hasKey = !!(providerKeys[p.id] || '').trim();
+                const hasKey = (providerKeys[p.id] || []).some(k => k.trim());
                 const testSt = aiTestStatus[p.id] || 'idle';
                 return (
                   <div
@@ -864,23 +952,17 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">
-                  {currentProviderDef.keyLabel}
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={providerKeys[activeProvider] || ''}
-                    onChange={e => setProviderKeys(prev => ({ ...prev, [activeProvider]: e.target.value }))}
-                    placeholder={currentProviderDef.keyPlaceholder}
-                    className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]"
-                  />
-                  <button onClick={() => handleTestAI(activeProvider)}
-                    disabled={aiTestStatus[activeProvider] === 'testing'}
-                    className="px-4 py-2 border border-[#1e2a4a]/25 text-[#1e2a4a] text-xs font-bold rounded-xl bg-transparent cursor-pointer whitespace-nowrap hover:bg-slate-50 disabled:opacity-50">
-                    {aiTestStatus[activeProvider] === 'testing' ? '⏳' : '🔌 Test'}
-                  </button>
-                </div>
+                <MultiKeyInput
+                  keys={providerKeys[activeProvider] || ['']}
+                  onChange={keys => setProviderKeys(prev => ({ ...prev, [activeProvider]: keys }))}
+                  label={currentProviderDef.keyLabel}
+                  placeholder={currentProviderDef.keyPlaceholder}
+                />
+                <button onClick={() => handleTestAI(activeProvider)}
+                  disabled={aiTestStatus[activeProvider] === 'testing'}
+                  className="mt-1 px-4 py-2 border border-[#1e2a4a]/25 text-[#1e2a4a] text-xs font-bold rounded-xl bg-transparent cursor-pointer whitespace-nowrap hover:bg-slate-50 disabled:opacity-50">
+                  {aiTestStatus[activeProvider] === 'testing' ? '⏳' : '🔌 Test Key Pertama'}
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -919,7 +1001,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
             <h4 className="font-bold text-sm text-[#1e2a4a]">Status Semua Provider</h4>
             <div className="space-y-2">
               {AI_PROVIDERS.map(p => {
-                const hasKey = !!(providerKeys[p.id] || '').trim();
+                const hasKey = (providerKeys[p.id] || []).some(k => k.trim());
                 const isActive = p.id === activeProvider;
                 return (
                   <div key={p.id} className={`flex items-center gap-3 p-3 rounded-xl ${isActive ? 'bg-[#1e2a4a]/5 border border-[#1e2a4a]/15' : 'bg-gray-50'}`}>
@@ -967,11 +1049,13 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                 <option value="en">English Only</option>
               </select>
             </div>
-            <div className="md:col-span-2 space-y-1">
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">API Key STT</label>
-              <input id="api-stt-key" type="password" value={sttKey} onChange={e => setSttKey(e.target.value)}
+            <div className="md:col-span-2">
+              <MultiKeyInput
+                keys={sttKeys}
+                onChange={setSttKeys}
+                label="API Key STT"
                 placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              />
             </div>
           </div>
 
@@ -1021,22 +1105,14 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               </div>
             </div>
 
-            {/* API Key */}
-            <div className="space-y-1">
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">ElevenLabs API Key</label>
-              <div className="flex gap-2 items-center">
-                <input
-                  id="api-elevenlabs-key"
-                  type="password"
-                  value={elevenLabsKey}
-                  onChange={e => setElevenLabsKey(e.target.value)}
-                  placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                  className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]"
-                />
-                {elevenLabsKey && (
-                  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold whitespace-nowrap">✓ Key ada</span>
-                )}
-              </div>
+            {/* API Keys */}
+            <div>
+              <MultiKeyInput
+                keys={elevenLabsKeys}
+                onChange={setElevenLabsKeys}
+                label="ElevenLabs API Key"
+                placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              />
             </div>
 
             {/* Voice Picker */}
@@ -1098,16 +1174,16 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
 
             {/* Preview Button */}
             <button
-              disabled={!elevenLabsKey || elevenPreview === 'loading'}
+              disabled={!elevenLabsKeys[0] || elevenPreview === 'loading'}
               onClick={async () => {
-                if (!elevenLabsKey) return;
+                if (!elevenLabsKeys[0]) return;
                 setElevenPreview('loading');
                 try {
                   const res = await fetch(
                     `https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}/stream`,
                     {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json', 'xi-api-key': elevenLabsKey },
+                      headers: { 'Content-Type': 'application/json', 'xi-api-key': elevenLabsKeys[0] },
                       body: JSON.stringify({
                         text: ttsPreviewText.trim() || 'Halo, ada yang bisa saya bantu?',
                         model_id: 'eleven_multilingual_v2',
@@ -1143,9 +1219,13 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Google Cloud API Key</label>
-                <input type="password" value={googleTtsKey} onChange={e => setGoogleTtsKey(e.target.value)} placeholder="AIzaSy-xxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              <div>
+                <MultiKeyInput
+                  keys={googleTtsKeys}
+                  onChange={setGoogleTtsKeys}
+                  label="Google Cloud API Key"
+                  placeholder="AIzaSy-xxxxxxxxxxxxxxxx"
+                />
               </div>
               <div className="space-y-1">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Suara</label>
@@ -1170,10 +1250,14 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               {ttsPrefProvider === 'openai' && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">AKTIF</span>}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="md:col-span-3 space-y-1">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">OpenAI API Key (TTS)</label>
-                <p className="text-[9px] text-slate-400">Bisa sama dengan key AI Engine jika OpenAI GPT sudah dikonfigurasi.</p>
-                <input type="password" value={openaiTtsKey} onChange={e => setOpenaiTtsKey(e.target.value)} placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              <div className="md:col-span-3">
+                <p className="text-[9px] text-slate-400 mb-1">Bisa sama dengan key AI Engine jika OpenAI GPT sudah dikonfigurasi.</p>
+                <MultiKeyInput
+                  keys={openaiTtsKeys}
+                  onChange={setOpenaiTtsKeys}
+                  label="OpenAI API Key (TTS)"
+                  placeholder="sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx"
+                />
               </div>
               <div className="space-y-1">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Suara</label>
@@ -1204,9 +1288,13 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Azure Subscription Key</label>
-                <input type="password" value={azureTtsKey} onChange={e => setAzureTtsKey(e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono outline-none focus:border-[#1e2a4a]" />
+              <div>
+                <MultiKeyInput
+                  keys={azureTtsKeys}
+                  onChange={setAzureTtsKeys}
+                  label="Azure Subscription Key"
+                  placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                />
               </div>
               <div className="space-y-1">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">Region</label>
