@@ -269,15 +269,11 @@ export const AI_PROVIDERS = [
     ],
     defaultModel: 'anthropic/claude-sonnet-4-6',
     callFn: async (apiKey: string, model: string, systemPrompt: string, userMsg: string, temp: number, maxTokens: number) => {
-      // Multi-key: apiKey bisa berisi beberapa key dipisah koma
-      // Rotasi berdasarkan timestamp agar beban merata
-      const keys = apiKey.split(',').map(k => k.trim()).filter(Boolean);
-      const activeKey = keys[Math.floor(Date.now() / 60000) % keys.length];
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${activeKey}`,
+          'Authorization': `Bearer ${apiKey}`,
           'HTTP-Referer': window.location.origin,
           'X-Title': 'CENNA AI Clinical Assistant',
         },
@@ -298,31 +294,201 @@ export const AI_PROVIDERS = [
   },
 ];
 
-// ─── In-memory cache untuk AI config (agar tidak hit DB tiap panggilan) ────────
+// ─── Drag-and-Drop Order List Component ─────────────────────────────────────
+interface DragOrderItem { id: string; icon: string; name: string; sub?: string; hasKey?: boolean; }
+interface DragOrderListProps {
+  items: DragOrderItem[];
+  onReorder: (newOrder: DragOrderItem[]) => void;
+  label?: string;
+  badge?: (item: DragOrderItem) => React.ReactNode;
+}
+function DragOrderList({ items, onReorder, label, badge }: DragOrderListProps) {
+  const [dragging, setDragging] = React.useRef<number | null>(null);
+  const [dragOver, setDragOver] = React.useRef<number | null>(null);
+  const [localItems, setLocalItems] = React.useState(items);
+  const [dragIdx, setDragIdx] = React.useState<number | null>(null);
+  const [overIdx, setOverIdx] = React.useState<number | null>(null);
+
+  // Sync with parent when items change externally
+  React.useEffect(() => { setLocalItems(items); }, [items.map(i => i.id).join(',')]);
+
+  const handleDragStart = (e: React.DragEvent, idx: number) => {
+    dragging.current = idx;
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const handleDragEnter = (idx: number) => {
+    if (dragging.current === null || dragging.current === idx) return;
+    dragOver.current = idx;
+    setOverIdx(idx);
+    // Reorder preview
+    const next = [...localItems];
+    const [moved] = next.splice(dragging.current, 1);
+    next.splice(idx, 0, moved);
+    dragging.current = idx;
+    setLocalItems(next);
+  };
+  const handleDragEnd = () => {
+    setDragIdx(null);
+    setOverIdx(null);
+    dragging.current = null;
+    dragOver.current = null;
+    onReorder(localItems);
+  };
+  const moveUp = (idx: number) => {
+    if (idx === 0) return;
+    const next = [...localItems];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    setLocalItems(next);
+    onReorder(next);
+  };
+  const moveDown = (idx: number) => {
+    if (idx === localItems.length - 1) return;
+    const next = [...localItems];
+    [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
+    setLocalItems(next);
+    onReorder(next);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {label && (
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[#1e2a4a]">{label}</span>
+          <span className="text-[9px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">drag atau ▲▼ untuk atur urutan</span>
+        </div>
+      )}
+      {localItems.map((item, idx) => (
+        <div
+          key={item.id}
+          draggable
+          onDragStart={e => handleDragStart(e, idx)}
+          onDragEnter={() => handleDragEnter(idx)}
+          onDragOver={e => e.preventDefault()}
+          onDragEnd={handleDragEnd}
+          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border-2 transition select-none ${
+            dragIdx === idx
+              ? 'opacity-40 border-dashed border-[#1e2a4a]/40 bg-slate-50'
+              : 'border-gray-200 bg-white hover:border-[#1e2a4a]/30 hover:shadow-sm'
+          } cursor-grab active:cursor-grabbing`}
+        >
+          {/* Drag handle */}
+          <div className="flex flex-col gap-[3px] px-0.5 cursor-grab opacity-30 hover:opacity-70 flex-shrink-0">
+            <div className="w-3.5 h-[2px] bg-[#1e2a4a] rounded-full" />
+            <div className="w-3.5 h-[2px] bg-[#1e2a4a] rounded-full" />
+            <div className="w-3.5 h-[2px] bg-[#1e2a4a] rounded-full" />
+          </div>
+          {/* Rank badge */}
+          <div className={`w-5 h-5 flex-shrink-0 flex items-center justify-center rounded-full text-[9px] font-black ${
+            idx === 0 ? 'bg-[#1e2a4a] text-white' : 'bg-slate-100 text-slate-500'
+          }`}>
+            {idx + 1}
+          </div>
+          {/* Icon */}
+          <span className="text-base flex-shrink-0">{item.icon}</span>
+          {/* Name */}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-[#1e2a4a] leading-tight">{item.name}</p>
+            {item.sub && <p className="text-[9px] text-slate-400 truncate">{item.sub}</p>}
+          </div>
+          {/* Custom badge */}
+          {badge && badge(item)}
+          {/* Up/Down arrows */}
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            <button onClick={() => moveUp(idx)} disabled={idx === 0}
+              className="w-5 h-5 flex items-center justify-center text-[#1e2a4a] bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-20 text-[10px] font-bold border-none cursor-pointer">
+              ▲
+            </button>
+            <button onClick={() => moveDown(idx)} disabled={idx === localItems.length - 1}
+              className="w-5 h-5 flex items-center justify-center text-[#1e2a4a] bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-20 text-[10px] font-bold border-none cursor-pointer">
+              ▼
+            </button>
+          </div>
+        </div>
+      ))}
+      {localItems.length > 0 && (
+        <p className="text-[9px] text-slate-400 pt-1">
+          📌 Urutan #1 = provider utama · Jika gagal/habis token, sistem otomatis ke urutan berikutnya
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── AI Config Cache ──────────────────────────────────────────────────────────
 let _aiConfigCache: {
   providerId: string;
-  apiKeys: Record<string, string>;
+  // Multi-key per provider: key sudah di-expand ke array
+  apiKeysMap: Record<string, string[]>;
   model: string;
   temperature: number;
   maxTokens: number;
+  // Urutan rotasi provider (dari drag-drop admin)
+  providerOrder: string[];
 } | null = null;
 
-// BUG-N1 FIX: Tambah TTL 5 menit agar admin ganti provider/key efektif tanpa reload
-// Sebelumnya: cache tidak pernah expire — provider lama tetap dipakai selama tab terbuka
 const _AI_CONFIG_CACHE_TTL = 5 * 60 * 1000;
 let _aiConfigCacheTs = 0;
+
+// ─── Rotation State ───────────────────────────────────────────────────────────
+// Menyimpan indeks key yang sedang aktif per-provider (persisten selama tab terbuka)
+const _keyRotationIndex: Record<string, number> = {};
+// Set key yang sementara di-blacklist (habis token / rate-limit), reset otomatis 60 detik
+const _keyBlacklist: Map<string, number> = new Map(); // key → timestamp blacklist
+const KEY_BLACKLIST_TTL = 60 * 1000; // 60 detik
+
+function isKeyBlacklisted(providerId: string, keyIndex: number): boolean {
+  const mapKey = `${providerId}:${keyIndex}`;
+  const ts = _keyBlacklist.get(mapKey);
+  if (!ts) return false;
+  if (Date.now() - ts > KEY_BLACKLIST_TTL) {
+    _keyBlacklist.delete(mapKey);
+    console.debug(`[CENNA:rotation] Key ${mapKey} blacklist expired — dicoba lagi`);
+    return false;
+  }
+  return true;
+}
+
+function blacklistKey(providerId: string, keyIndex: number) {
+  const mapKey = `${providerId}:${keyIndex}`;
+  _keyBlacklist.set(mapKey, Date.now());
+  console.warn(`[CENNA:rotation] Key #${keyIndex + 1} provider '${providerId}' di-blacklist selama ${KEY_BLACKLIST_TTL / 1000}s`);
+}
+
+/** Deteksi apakah error disebabkan habis token / rate-limit / key tidak valid */
+function isExhaustedError(err: any): boolean {
+  const msg = (err?.message || '').toLowerCase();
+  return (
+    msg.includes('rate limit') ||
+    msg.includes('rate_limit') ||
+    msg.includes('quota') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('billing') ||
+    msg.includes('exceeded') ||
+    msg.includes('too many requests') ||
+    msg.includes('429') ||
+    msg.includes('overloaded') ||
+    msg.includes('capacity') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('invalid api key') ||
+    msg.includes('invalid_api_key') ||
+    msg.includes('unauthorized') ||
+    msg.includes('401') ||
+    msg.includes('403')
+  );
+}
 
 export function clearAiConfigCache() {
   _aiConfigCache = null;
   _aiConfigCacheTs = 0;
-  console.debug('[CENNA:aiConfigCache] Cache invalidated');
+  _keyBlacklist.clear();
+  console.debug('[CENNA:aiConfigCache] Cache & blacklist invalidated');
 }
 
 export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
   const now = Date.now();
-  // BUG-N1 FIX: TTL check — expire setelah 5 menit
   if (_aiConfigCache && now - _aiConfigCacheTs < _AI_CONFIG_CACHE_TTL) {
-    console.debug('[CENNA:loadAiConfigFromDb] Returning cached config (TTL ok)', _aiConfigCache);
+    console.debug('[CENNA:loadAiConfigFromDb] Returning cached config (TTL ok)');
     return _aiConfigCache;
   }
 
@@ -330,64 +496,143 @@ export async function loadAiConfigFromDb(): Promise<typeof _aiConfigCache> {
   const dbAiConfig = await sbGetSetting<{
     provider: string; model: string; temperature: number; maxTokens: number;
   }>('api_ai_config');
-  console.debug('[CENNA:loadAiConfigFromDb] api_ai_config result:', dbAiConfig);
 
   const providerId = dbAiConfig?.provider || 'anthropic';
   const provider   = AI_PROVIDERS.find(p => p.id === providerId) || AI_PROVIDERS[0];
-  if (!AI_PROVIDERS.find(p => p.id === providerId)) console.warn('[CENNA:loadAiConfigFromDb] Provider tidak dikenali:', providerId, '— fallback ke', provider.id);
+  if (!AI_PROVIDERS.find(p => p.id === providerId))
+    console.warn('[CENNA:loadAiConfigFromDb] Provider tidak dikenali:', providerId, '— fallback ke', provider.id);
 
-  // Baca semua API key per-provider dari DB (multi-key: rotasi berdasarkan waktu)
-  const apiKeys: Record<string, string> = {};
+  // Baca semua API key per-provider → simpan sebagai ARRAY (multi-key rotation)
+  const apiKeysMap: Record<string, string[]> = {};
   await Promise.all(
     AI_PROVIDERS.map(async p => {
-      const k = await sbGetSetting<string>(`AI_KEY_${p.id.toUpperCase()}`);
-      if (k) {
-        // Multi-key: pilih key aktif via rotasi menit
-        const keyArr = k.split(',').map(x => x.trim()).filter(Boolean);
-        apiKeys[p.id] = keyArr.length > 1
-          ? keyArr[Math.floor(Date.now() / 60000) % keyArr.length]
-          : keyArr[0] || k;
-        console.debug(`[CENNA:loadAiConfigFromDb] API key ditemukan untuk: ${p.id} (${keyArr.length} key, aktif #${Math.floor(Date.now() / 60000) % keyArr.length + 1})`);
-      } else console.warn(`[CENNA:loadAiConfigFromDb] API key KOSONG untuk: ${p.id}`);
+      const raw = await sbGetSetting<string | string[]>(`AI_KEY_${p.id.toUpperCase()}`);
+      let keyArr: string[] = [];
+      if (Array.isArray(raw)) {
+        keyArr = raw.map(k => k.trim()).filter(Boolean);
+      } else if (typeof raw === 'string' && raw.trim()) {
+        // Backward-compat: string tunggal atau comma-separated
+        keyArr = raw.split(',').map(k => k.trim()).filter(Boolean);
+      }
+      if (keyArr.length > 0) {
+        apiKeysMap[p.id] = keyArr;
+        console.debug(`[CENNA:loadAiConfigFromDb] ${p.id}: ${keyArr.length} key tersimpan`);
+      } else {
+        console.warn(`[CENNA:loadAiConfigFromDb] API key KOSONG untuk: ${p.id}`);
+      }
     })
   );
 
   _aiConfigCache = {
     providerId,
-    apiKeys,
+    apiKeysMap,
     model:       dbAiConfig?.model       ?? provider.defaultModel,
     temperature: dbAiConfig?.temperature ?? 0.3,
     maxTokens:   dbAiConfig?.maxTokens   ?? 2048,
+    providerOrder: (await sbGetSetting<string[]>('ai_provider_order')) || AI_PROVIDERS.map(p => p.id),
   };
-  _aiConfigCacheTs = Date.now(); // BUG-N1 FIX: catat waktu cache
-  console.debug('[CENNA:loadAiConfigFromDb] Cache tersimpan:', _aiConfigCache);
+  _aiConfigCacheTs = Date.now();
+  console.debug('[CENNA:loadAiConfigFromDb] Cache tersimpan, providers:', Object.keys(apiKeysMap).map(id => `${id}(${apiKeysMap[id].length})`).join(', '));
   return _aiConfigCache;
 }
 
-// ─── Exported helper: call active AI provider ────────────────────────────────
+// ─── Exported helper: call active AI provider — dengan rotasi otomatis ────────
+//
+// Urutan rotasi:
+//   1. Coba semua key aktif pada provider utama (skip key yang di-blacklist)
+//   2. Jika semua key provider utama gagal → coba provider lain yang punya key
+//   3. Jika semua provider gagal → lempar error terakhir
+//
 export async function callActiveAI(
   systemPrompt: string,
   userMsg: string,
 ): Promise<string> {
-  console.debug('[CENNA:callActiveAI] Memuat konfigurasi AI dari DB/cache...');
-  const cfg      = await loadAiConfigFromDb();
-  const provider = AI_PROVIDERS.find(p => p.id === cfg!.providerId) || AI_PROVIDERS[0];
-  const apiKey   = cfg!.apiKeys[provider.id] || '';
-  console.debug(`[CENNA:callActiveAI] Provider: ${provider.name}, Model: ${cfg!.model}, Temp: ${cfg!.temperature}, MaxTokens: ${cfg!.maxTokens}`);
+  console.debug('[CENNA:callActiveAI] Memuat konfigurasi AI...');
+  const cfg = await loadAiConfigFromDb();
+  if (!cfg) throw new Error('Konfigurasi AI tidak tersedia.');
 
-  if (!apiKey) {
-    console.error(`[CENNA:callActiveAI] API Key untuk ${provider.name} tidak ditemukan di DB!`);
-    throw new Error(`API Key untuk ${provider.name} belum dikonfigurasi.`);
+  const { providerId, apiKeysMap, model, temperature, maxTokens, providerOrder } = cfg;
+
+  // Susun urutan provider sesuai pengaturan admin (drag-drop)
+  // Provider utama = yang terpilih di selector (providerId), diprioritaskan di posisi pertama
+  const sortedIds = [
+    providerId,
+    ...providerOrder.filter(id => id !== providerId),
+    ...AI_PROVIDERS.map(p => p.id).filter(id => id !== providerId && !providerOrder.includes(id)),
+  ];
+  const orderedProviders = sortedIds
+    .map(id => AI_PROVIDERS.find(p => p.id === id))
+    .filter((p): p is typeof AI_PROVIDERS[0] => !!p && (apiKeysMap[p.id]?.length ?? 0) > 0);
+
+  const primaryProvider = orderedProviders[0] || AI_PROVIDERS[0];
+
+  let lastError: Error = new Error('Tidak ada AI provider yang berhasil dihubungi.');
+
+  for (const provider of orderedProviders) {
+    const keys = apiKeysMap[provider.id] ?? [];
+    if (keys.length === 0) {
+      console.warn(`[CENNA:callActiveAI] Skip ${provider.name}: tidak ada API key`);
+      continue;
+    }
+
+    // Tentukan model yang dipakai — provider utama pakai model terpilih,
+    // provider fallback pakai defaultModel-nya sendiri
+    const activeModel = provider.id === primaryProvider.id ? model : provider.defaultModel;
+
+    // Inisialisasi indeks rotasi untuk provider ini
+    if (_keyRotationIndex[provider.id] === undefined) _keyRotationIndex[provider.id] = 0;
+
+    // Coba setiap key pada provider ini, mulai dari indeks rotasi terakhir
+    let triedCount = 0;
+    while (triedCount < keys.length) {
+      const keyIdx = _keyRotationIndex[provider.id] % keys.length;
+
+      if (isKeyBlacklisted(provider.id, keyIdx)) {
+        // Key ini sedang di-blacklist — skip ke berikutnya
+        _keyRotationIndex[provider.id] = (keyIdx + 1) % keys.length;
+        triedCount++;
+        continue;
+      }
+
+      const apiKey = keys[keyIdx];
+      console.debug(`[CENNA:callActiveAI] Mencoba ${provider.name} key #${keyIdx + 1}/${keys.length}, model: ${activeModel}`);
+
+      try {
+        const result = await provider.callFn(
+          apiKey, activeModel, systemPrompt, userMsg, temperature, maxTokens
+        );
+        // Berhasil — perbarui indeks rotasi ke key berikutnya (round-robin normal)
+        _keyRotationIndex[provider.id] = (keyIdx + 1) % keys.length;
+        console.debug(`[CENNA:callActiveAI] ✓ Berhasil via ${provider.name} key #${keyIdx + 1} (${result.length} karakter)`);
+        return result;
+      } catch (e: any) {
+        lastError = e;
+        console.warn(`[CENNA:callActiveAI] ✗ ${provider.name} key #${keyIdx + 1} gagal: ${e.message}`);
+
+        if (isExhaustedError(e)) {
+          // Token habis / rate-limit / key tidak valid → blacklist key ini sementara
+          blacklistKey(provider.id, keyIdx);
+          _keyRotationIndex[provider.id] = (keyIdx + 1) % keys.length;
+          triedCount++;
+          // Langsung coba key berikutnya pada provider yang sama
+          continue;
+        } else {
+          // Error lain (network, 5xx, dll) — hentikan percobaan pada provider ini
+          console.error(`[CENNA:callActiveAI] Error non-exhausted pada ${provider.name}:`, e.message);
+          break;
+        }
+      }
+    }
+
+    console.warn(`[CENNA:callActiveAI] Semua key ${provider.name} gagal — mencoba provider berikutnya...`);
   }
-  console.debug(`[CENNA:callActiveAI] Memanggil ${provider.name} API...`);
-  try {
-    const result = await provider.callFn(apiKey, cfg!.model, systemPrompt, userMsg, cfg!.temperature, cfg!.maxTokens);
-    console.debug(`[CENNA:callActiveAI] Respons diterima (${result.length} karakter)`);
-    return result;
-  } catch (e: any) {
-    console.error(`[CENNA:callActiveAI] Error dari ${provider.name}:`, e.message);
-    throw e;
-  }
+
+  // Semua provider gagal
+  console.error('[CENNA:callActiveAI] ✗ Semua AI provider dan key telah dicoba — gagal semua.');
+  throw new Error(
+    `Semua AI provider gagal merespons. Error terakhir: ${lastError.message}\n` +
+    `Periksa konfigurasi API key di menu Pengaturan.`
+  );
 }
 
 
@@ -476,7 +721,12 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
   const [aiModel, setAiModel] = useState('');
   const [aiTemp, setAiTemp] = useState(0.3);
   const [aiMaxTokens, setAiMaxTokens] = useState(2048);
-  const [aiTestStatus, setAiTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
+  const [aiTestStatus, setAiTestStatus] = React.useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
+  // Urutan rotasi provider AI (drag-drop)
+  const [aiProviderOrder, setAiProviderOrder] = React.useState<string[]>(AI_PROVIDERS.map(p => p.id));
+  // Urutan rotasi TTS (drag-drop)
+  const TTS_ORDER_DEFAULTS = ['elevenlabs', 'google', 'openai', 'azure', 'browser'];
+  const [ttsOrder, setTtsOrder] = React.useState<string[]>(TTS_ORDER_DEFAULTS);
 
   // STT
   const [sttKeys, setSttKeys] = useState<string[]>(['']);
@@ -608,6 +858,30 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       setTtsPrefProvider(ttsProvider || '');
       setTtsPreviewText(ttsPreview || '');
 
+      // ── AI Provider Order ──
+      const savedAiOrder = await sbGetSetting<string[]>('ai_provider_order');
+      if (Array.isArray(savedAiOrder) && savedAiOrder.length > 0) {
+        // Merge: pastikan semua provider ada (provider baru tidak hilang)
+        const merged = [
+          ...savedAiOrder.filter(id => AI_PROVIDERS.some(p => p.id === id)),
+          ...AI_PROVIDERS.map(p => p.id).filter(id => !savedAiOrder.includes(id)),
+        ];
+        setAiProviderOrder(merged);
+        console.debug('[CENNA:loadSettings] ai_provider_order:', merged);
+      }
+
+      // ── TTS Order ──
+      const savedTtsOrder = await sbGetSetting<string[]>('tts_order');
+      if (Array.isArray(savedTtsOrder) && savedTtsOrder.length > 0) {
+        const allTts = ['elevenlabs', 'google', 'openai', 'azure', 'browser'];
+        const merged = [
+          ...savedTtsOrder.filter(id => allTts.includes(id)),
+          ...allTts.filter(id => !savedTtsOrder.includes(id)),
+        ];
+        setTtsOrder(merged);
+        console.debug('[CENNA:loadSettings] tts_order:', merged);
+      }
+
       // ── STT Silence duration ──
       const savedSilenceMs = await sbGetSetting<number>('stt_silence_ms');
       if (savedSilenceMs) setSilenceMs(savedSilenceMs);
@@ -710,6 +984,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       });
       clearAiConfigCache();
       console.debug('[CENNA:handleSaveAI] ✅ AI config tersimpan, cache di-invalidate.');
+      // Simpan urutan rotasi provider
+      await sbSetSetting('ai_provider_order', aiProviderOrder);
+      console.debug('[CENNA:handleSaveAI] ✅ ai_provider_order tersimpan:', aiProviderOrder);
       await sbAddLog('success', 'SYSTEM', `AI Engine diubah ke ${currentProviderDef.name} — ${aiModel}.`);
       alert(`✅ Konfigurasi ${currentProviderDef.name} berhasil disimpan ke database!`);
     } catch (e: any) {
@@ -785,6 +1062,9 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
       await sbSetSetting('tts_provider', ttsPrefProvider);
       await sbSetSetting('tts_preview_text', ttsPreviewText.trim());
       await sbSetSetting('stt_silence_ms', silenceMs);
+      // Simpan urutan rotasi TTS
+      await sbSetSetting('tts_order', ttsOrder);
+      console.debug('[CENNA:handleSaveSTT] ✅ tts_order tersimpan:', ttsOrder);
       // BUG-N5 FIX: invalidasi TTS cache agar perubahan efektif segera (tidak tunggu 5 menit TTL)
       invalidateTtsCache();
       console.debug('[CENNA:handleSaveSTT] ✅ Semua TTS config tersimpan & cache invalidated. Provider utama:', ttsPrefProvider);
@@ -1017,6 +1297,38 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* ── AI Provider Rotation Order (drag-drop) ── */}
+          <div className="bg-white border border-[#1e2a4a]/12 rounded-3xl p-6 space-y-4">
+            <div>
+              <h4 className="font-bold text-sm text-[#1e2a4a] mb-0.5">🔄 Urutan Rotasi Provider AI</h4>
+              <p className="text-[10px] text-slate-500">Atur prioritas fallback — jika provider #1 kehabisan token, sistem otomatis coba provider #2, #3, dst.</p>
+            </div>
+            <DragOrderList
+              label="Urutan Prioritas"
+              items={aiProviderOrder.map(id => {
+                const p = AI_PROVIDERS.find(x => x.id === id)!;
+                const hasKey = (providerKeys[id] || []).some(k => k.trim());
+                return { id, icon: p?.icon || '🤖', name: p?.name || id, sub: p?.models[0]?.label, hasKey };
+              })}
+              onReorder={newOrder => setAiProviderOrder(newOrder.map(i => i.id))}
+              badge={item => (
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {item.id === activeProvider && (
+                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">UTAMA</span>
+                  )}
+                  <span className={`w-2 h-2 rounded-full ${item.hasKey ? 'bg-emerald-400' : 'bg-gray-300'}`}
+                    title={item.hasKey ? 'Key tersimpan' : 'Belum ada key'} />
+                </div>
+              )}
+            />
+            <div className="pt-2 border-t border-gray-100">
+              <button onClick={handleSaveAI}
+                className="px-5 py-2.5 bg-[#1e2a4a] hover:bg-[#2d3f6b] text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-sm">
+                💾 Simpan Urutan Rotasi AI
+              </button>
             </div>
           </div>
         </div>
@@ -1325,18 +1637,53 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
           {/* TTS Provider Pilihan */}
           <div className="border-t border-gray-100 pt-5 space-y-3">
             <div>
-              <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">🔊 Provider TTS Utama CENNA</h4>
-              <p className="text-[10px] text-slate-500">Jika gagal, sistem fallback otomatis ke provider berikutnya yang sudah dikonfigurasi, lalu ke Browser TTS.</p>
+              <h4 className="font-bold text-xs text-[#1e2a4a] mb-1">🔊 Urutan Rotasi TTS CENNA</h4>
+              <p className="text-[10px] text-slate-500">Drag untuk atur urutan. Provider #1 digunakan utama. Jika gagal/habis token, sistem otomatis ke urutan berikutnya, lalu Browser TTS sebagai cadangan terakhir.</p>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-              {[{id:'elevenlabs',name:'ElevenLabs'},{id:'google',name:'Google TTS'},{id:'openai',name:'OpenAI TTS'},{id:'azure',name:'Azure TTS'},{id:'browser',name:'Browser'}].map(tp => (
-                <button key={tp.id} onClick={() => setTtsPrefProvider(tp.id)}
-                  className={`p-2.5 rounded-xl border-2 text-left transition cursor-pointer ${ ttsPrefProvider === tp.id ? 'border-[#1e2a4a] bg-[#1e2a4a]/8 shadow-sm' : 'border-gray-200 hover:border-[#1e2a4a]/40 bg-white'}`}>
-                  <p className="text-[11px] font-bold text-[#1e2a4a] leading-tight">{tp.name}</p>
-                  {ttsPrefProvider === tp.id && <div className="mt-1.5 flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500" /><span className="text-[9px] text-emerald-600 font-bold">AKTIF</span></div>}
-                </button>
-              ))}
-            </div>
+            {/* TTS Drag-Drop Order */}
+            <DragOrderList
+              label="Urutan Prioritas TTS"
+              items={(() => {
+                const TTS_META: Record<string, { icon: string; name: string; sub: string }> = {
+                  elevenlabs: { icon: '🎤', name: 'ElevenLabs', sub: 'Paling natural · eleven_multilingual_v2' },
+                  google:     { icon: '🔵', name: 'Google Cloud TTS', sub: 'Bahasa Indonesia konsisten · WaveNet' },
+                  openai:     { icon: '🟢', name: 'OpenAI TTS', sub: 'tts-1 / tts-1-hd · Stabil' },
+                  azure:      { icon: '🔷', name: 'Microsoft Azure TTS', sub: 'Neural voices id-ID · GadisNeural' },
+                  browser:    { icon: '🌐', name: 'Browser TTS', sub: 'Gratis · Tidak perlu API key' },
+                };
+                const hasKeyMap: Record<string, boolean> = {
+                  elevenlabs: elevenLabsKeys.some(k => k.trim()),
+                  google:     googleTtsKeys.some(k => k.trim()),
+                  openai:     openaiTtsKeys.some(k => k.trim()),
+                  azure:      azureTtsKeys.some(k => k.trim()),
+                  browser:    true,
+                };
+                return ttsOrder.map(id => ({
+                  id,
+                  icon: TTS_META[id]?.icon || '🔊',
+                  name: TTS_META[id]?.name || id,
+                  sub:  TTS_META[id]?.sub,
+                  hasKey: hasKeyMap[id] ?? false,
+                }));
+              })()}
+              onReorder={newOrder => {
+                const newIds = newOrder.map(i => i.id);
+                setTtsOrder(newIds);
+                // Sync ttsPrefProvider ke item #1
+                setTtsPrefProvider(newIds[0] || '');
+              }}
+              badge={item => (
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {item.id === ttsOrder[0] && (
+                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full">UTAMA</span>
+                  )}
+                  {item.id !== 'browser' && (
+                    <span className={`w-2 h-2 rounded-full ${item.hasKey ? 'bg-emerald-400' : 'bg-gray-300'}`}
+                      title={item.hasKey ? 'Key tersimpan' : 'Belum ada key'} />
+                  )}
+                </div>
+              )}
+            />
           </div>
 
           <div className="pt-4 border-t border-gray-100">

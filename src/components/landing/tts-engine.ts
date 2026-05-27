@@ -248,7 +248,6 @@ export function speakBrowser(text: string, onEnd: () => void): void {
 // ─── speak() — entry point utama ─────────────────────────────────────────────
 export async function speak(text: string, onEnd: () => void): Promise<void> {
   _isSpeaking = true;
-  const preferredProvider = (await getCached<string>('tts_provider')) || 'elevenlabs';
 
   const safeOnEnd = () => {
     setTimeout(() => {
@@ -272,13 +271,30 @@ export async function speak(text: string, onEnd: () => void): Promise<void> {
     speakBrowser(text, safeOnEnd);
   };
 
-  const fallbackOrder = ['elevenlabs', 'google', 'openai', 'azure']
-    .filter(p => p !== preferredProvider);
+  // Baca urutan provider dari DB (diset admin via drag-drop di Settings)
+  // Key 'tts_order' = array e.g. ['google','elevenlabs','openai','azure','browser']
+  const savedOrder = await getCached<string[]>('tts_order');
+  const ALL_TTS = ['elevenlabs', 'google', 'openai', 'azure', 'browser'];
+  let orderedProviders: string[];
+
+  if (Array.isArray(savedOrder) && savedOrder.length > 0) {
+    // Urutan dari admin drag-drop; tambahkan sisa provider yang tidak tercantum sebagai fallback
+    orderedProviders = [
+      ...savedOrder.filter((p: string) => ALL_TTS.includes(p)),
+      ...ALL_TTS.filter(p => !savedOrder.includes(p)),
+    ];
+    console.debug('[TTS] Urutan dari DB (tts_order):', orderedProviders.join(' → '));
+  } else {
+    // Backward-compat: baca tts_provider (key lama, pilihan tunggal)
+    const preferredProvider = (await getCached<string>('tts_provider')) || 'elevenlabs';
+    orderedProviders = [preferredProvider, ...ALL_TTS.filter(p => p !== preferredProvider)];
+    console.debug('[TTS] Urutan (legacy tts_provider):', orderedProviders.join(' → '));
+  }
 
   // BUG-C2 FIX: Safety net — pastikan _isSpeaking SELALU di-reset ke false
   // Sebelumnya: jika getCached/tryProviders throw, _isSpeaking stuck = true selamanya
   try {
-    await tryProviders([preferredProvider, ...fallbackOrder, 'browser']);
+    await tryProviders(orderedProviders);
   } catch (e) {
     console.error('[TTS] ❌ Unexpected error in speak():', e);
     _isSpeaking = false;
