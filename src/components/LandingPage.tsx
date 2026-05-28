@@ -19,6 +19,7 @@ import {
   handleWakeWordFlow, generateConclusion,
   type CapturedData,
 } from './landing/ai-engine';
+import { onAiRotation } from './ApiSettings';
 import { useWakeWord, useAmbientListener, useMobileAmbientListener, emergencyStopAllMic } from './landing/stt-hooks';
 import { OrbCore, useOrbCanvas, StatusPill, type OrbPhase, type OrbVisualModel } from './landing/orb-canvas';
 import { ConclusionPopup } from './landing/session-popup';
@@ -58,6 +59,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [conclusionData, setConclusionData] = useState<ClinicalConclusion | null>(null);
   const [redFlagsData,   setRedFlagsData]   = useState<string[]>([]);
   const [aiLabel,        setAiLabel]        = useState('Cenna sedang berpikir…');
+
   const [aiEnabled,      setAiEnabled]      = useState(false);
   const [templateOrbColors, setTemplateOrbColors] = useState<{ primary: string; secondary: string } | null>(null);
   const [templateModeName,  setTemplateModeName]  = useState<string | null>(null);
@@ -83,13 +85,16 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
   // ── Load settings dari DB ──────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       // Orb visual model
       const model = await sbGetSetting<string>('orb_visual_model');
+      if (cancelled) return;
       if (model) setOrbVisualModel(model as OrbVisualModel);
 
       // AI enabled check
       const aiCfg = await sbGetSetting<{ provider?: string; keyConfigured?: boolean }>('api_ai_config');
+      if (cancelled) return;
       if (aiCfg?.keyConfigured) {
         setAiEnabled(true);
         console.debug('[CENNA:LandingPage] AI enabled via api_ai_config.keyConfigured');
@@ -97,6 +102,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         const providers = ['anthropic', 'openai', 'gemini', 'mistral', 'groq', 'deepseek', 'openrouter'];
         const active    = aiCfg?.provider || 'anthropic';
         for (const p of [active, ...providers.filter(x => x !== active)]) {
+          if (cancelled) break;
           const key = await sbGetSetting<string>(`AI_KEY_${p.toUpperCase()}`);
           if (key?.trim()) { setAiEnabled(true); console.debug('[CENNA:LandingPage] AI enabled, provider:', p); break; }
         }
@@ -104,6 +110,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       // Branding
       const b = await sbGetSetting<{ logoUrl?: string; brand?: string; tagline?: string; colorPrimary?: string; colorAccent?: string }>('branding');
+      if (cancelled) return;
       if (b?.brand)        setAppName(b.brand);
       if (b?.tagline)      setTagline(b.tagline);
       if (b?.colorPrimary || b?.colorAccent) setBrandColors({ primary: b.colorPrimary ?? '#1e2a4a', accent: b.colorAccent ?? '#b8a898' });
@@ -112,6 +119,7 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       // Landing config — prioritas lebih tinggi dari branding, override jika ada
       const lc = await sbGetSetting<{ appName?: string; tagline?: string; logoUrl?: string; wakeGreeting?: string; showLoginButton?: boolean }>('landing_config');
+      if (cancelled) return;
       if (lc?.appName)  setAppName(lc.appName);
       if (lc?.tagline)  setTagline(lc.tagline);
       // BUG-H2 FIX: typeof string check agar penghapusan logo ('') ter-apply
@@ -121,14 +129,24 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       // Silence detection duration dari DB
       const savedSilenceMs = await sbGetSetting<number>('stt_silence_ms');
-      if (savedSilenceMs && savedSilenceMs >= 500) setSilenceMs(savedSilenceMs);
+      if (!cancelled && savedSilenceMs && savedSilenceMs >= 500) setSilenceMs(savedSilenceMs);
       console.debug('[CENNA:LandingPage] stt_silence_ms:', savedSilenceMs ?? '(default 2000ms)');
 
     })();
 
     const handleResize = () => setOrbSize(Math.min(window.innerWidth * 0.88, window.innerHeight * 0.88, 700));
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
+  // FIX-R3: Subscribe ke event rotasi AI agar label orb update saat provider di-swap
+  // Diletakkan SETELAH blok load settings agar urutan hooks konsisten
+  useEffect(() => {
+    const unsub = onAiRotation((msg) => setAiLabel(msg));
+    return unsub;
   }, []);
 
   useOrbCanvas(canvasRef, phase, brandColors);
@@ -211,7 +229,13 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
     try {
       setAiLabel('Cenna sedang berpikir…');
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('AI_TIMEOUT')), 30_000));
+      // FIX-R1: Timeout diperpanjang 90 detik agar rotasi multi-provider sempat berjalan.
+      // Dengan 7 provider × maks 3 key, worst-case bisa 7× percobaan sebelum menyerah.
+      // 30 detik terlalu sempit — rotasi key #2/#3 tidak sempat dicoba sebelum timeout.
+      const ROTATION_TIMEOUT_MS = 90_000;
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('AI_TIMEOUT')), ROTATION_TIMEOUT_MS)
+      );
       const currentRound   = Math.floor(currentHistory.length / 2);
       const aiResult       = await Promise.race([callCennaAI(data.transcript, currentHistory.slice(0, -1), currentRound), timeoutPromise]);
       currentHistory.push({ role: 'assistant', content: aiResult.voice_response });
@@ -281,10 +305,21 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
       }
     } catch (err) {
       const isTimeout = err instanceof Error && err.message === 'AI_TIMEOUT';
-      console.warn('[CENNA:LandingPage] AI error:', isTimeout ? 'timeout 30s' : err);
+      // FIX-R2: Bedakan pesan error: timeout vs semua provider habis vs gangguan jaringan
+      const isAllProvidersFailed = err instanceof Error &&
+        err.message.includes('Semua AI provider gagal');
+      let voiceMsg: string;
+      if (isTimeout) {
+        voiceMsg = 'Maaf dokter, Cenna membutuhkan waktu terlalu lama merespons. Silakan ulangi.';
+      } else if (isAllProvidersFailed) {
+        voiceMsg = 'Maaf dokter, semua layanan AI sedang tidak tersedia. Periksa konfigurasi API key.';
+      } else {
+        voiceMsg = 'Maaf dokter, ada gangguan koneksi. Silakan ulangi.';
+      }
+      console.warn('[CENNA:LandingPage] AI error:', isTimeout ? 'timeout 90s' : (err instanceof Error ? err.message : err));
       currentHistory.pop();
       setPhase('responding');
-      speak(isTimeout ? 'Maaf dokter, Cenna terlalu lama merespons. Silakan ulangi.' : 'Maaf dokter, ada gangguan koneksi. Silakan ulangi.', () => setPhase('listening'));
+      speak(voiceMsg, () => setPhase('listening'));
     }
   }, [aiEnabled]);
 
@@ -335,14 +370,32 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
         <OrbCore phase={phase} wakeEnabled={phase === 'idle'} wakeFlash={wakeFlash} templateColors={templateOrbColors} orbSize={orbSize} visualModel={orbVisualModel} />
       </div>
 
-      {/* Status text */}
+      {/* Status text — BUG #2 FIX: hapus label speaking/processing/responding karena
+           sudah ditangani StatusPill. Hanya idle yang tidak punya pill label informatif. */}
       <div className="absolute bottom-24 left-0 right-0 z-20 flex flex-col items-center gap-1 pointer-events-none text-center px-4">
-        {phase === 'idle' && !hasSpeechAPI && (<p className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>Wake word tidak didukung browser ini</p>)}
-        {phase === 'idle' && hasSpeechAPI && (<p className="text-[11px] tracking-[0.1em] text-[#1e2a4a]/30" style={{ fontFamily: "'DM Mono', monospace" }}>{aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}</p>)}
-        {phase === 'speaking'   && (<p className="text-[12px] tracking-[0.1em] text-[#b8a898]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>Cenna menyapa…</p>)}
-        {phase === 'processing' && (<p className="text-[12px] tracking-[0.1em]" style={{ fontFamily: "'DM Mono', monospace", color: '#7F77DD', animation: 'fadeIn 0.3s ease' }}>{aiLabel}</p>)}
-        {phase === 'responding' && (<p className="text-[12px] tracking-[0.1em] text-[#10b981]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.3s ease' }}>Cenna merespons…</p>)}
+        {phase === 'idle' && !hasSpeechAPI && (
+          <p key="no-speech" className="text-[9px] tracking-[0.1em] text-[#1e2a4a]/25" style={{ fontFamily: "'DM Mono', monospace" }}>Wake word tidak didukung browser ini</p>
+        )}
+        {phase === 'idle' && hasSpeechAPI && (
+          <p key="idle" className="text-[11px] tracking-[0.1em] text-[#1e2a4a]/30" style={{ fontFamily: "'DM Mono', monospace" }}>{aiEnabled ? '✦ AI Voice Assistant aktif' : '◦ Mode dasar aktif'}</p>
+        )}
+        {/* BUG #4 FIX: key unik per phase agar React unmount elemen lama → tidak ada ghost text */}
+        {phase === 'speaking' && (
+          <p key="speaking" className="text-[12px] tracking-[0.1em] text-[#b8a898]" style={{ fontFamily: "'DM Mono', monospace", animation: 'fadeIn 0.5s ease' }}>Cenna menyapa…</p>
+        )}
       </div>
+
+      {/* BUG #1 FIX: tampilkan missing_fields sebagai chip saat listening */}
+      {phase === 'listening' && missingFields.length > 0 && (
+        <div className="absolute z-20 flex gap-1.5 flex-wrap justify-center px-8 pointer-events-none" style={{ bottom: '112px' }}>
+          {missingFields.map((f, i) => (
+            <span key={i} className="px-2 py-0.5 rounded-full text-[9px] font-mono tracking-wide"
+              style={{ background: 'rgba(127,119,221,0.12)', color: '#7F77DD', border: '1px solid rgba(127,119,221,0.3)' }}>
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Tombol tap mobile */}
       {phase === 'idle' && hasSpeechAPI && isMobile && (
@@ -363,9 +416,24 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
 
       <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center gap-2 z-20">
         <StatusPill phase={phase} aiLabel={aiLabel} />
+        {/* BUG #3 FIX: tombol selalu tampil saat listening/processing/responding.
+             Saat processing: label berubah jadi 'Batalkan' + warna ungu agar lebih visible.
+             z-index: 30 agar tidak tertutup orb glow saat processing. */}
         {(phase === 'listening' || phase === 'processing' || phase === 'responding') && (
-          <button onClick={handleEndConversation} className="text-[9px] tracking-[0.14em] uppercase text-[#1e2a4a]/25 hover:text-[#1e2a4a]/50 transition-colors" style={{ fontFamily: "'DM Mono', monospace", background: 'none', border: 'none', cursor: 'pointer' }}>
-            Akhiri sesi
+          <button
+            onClick={handleEndConversation}
+            className="text-[9px] tracking-[0.14em] uppercase hover:opacity-80 transition-all"
+            style={{
+              fontFamily: "'DM Mono', monospace",
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              position: 'relative',
+              zIndex: 30,
+              color: phase === 'processing' ? 'rgba(127,119,221,0.65)' : 'rgba(30,42,74,0.25)',
+            }}
+          >
+            {phase === 'processing' ? '⏹ Batalkan' : 'Akhiri sesi'}
           </button>
         )}
       </div>

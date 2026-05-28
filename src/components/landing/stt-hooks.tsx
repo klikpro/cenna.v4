@@ -86,6 +86,8 @@ export function useWakeWord(onDetected: () => void, active: boolean) {
   }, []);
   stopRef.current = stop;
 
+  // BUG-FIX #3: start tidak boleh bergantung pada active langsung — gunakan activeRef
+  // supaya useCallback tidak basi ketika active berubah dari luar
   const start = useCallback(() => {
     if (!activeRef.current) return;
     if (runningRef.current) return;
@@ -129,7 +131,9 @@ export function useWakeWord(onDetected: () => void, active: boolean) {
   }, []);
 
   useEffect(() => {
-    if (!active) { activeRef.current = false; stop(); return () => stop(); }
+    // BUG-FIX #3: set activeRef sebelum stop()/start() agar tidak basi
+    activeRef.current = active;
+    if (!active) { stop(); return () => stop(); }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
@@ -145,7 +149,9 @@ export function useWakeWord(onDetected: () => void, active: boolean) {
       })
       .catch((err) => { console.warn('[Cenna wake] mic denied:', err); });
     return () => { cleanupCalled = true; activeRef.current = false; stop(); };
-  }, [active, start, stop]);
+  // start dan stop stabil (useCallback tanpa deps), tidak perlu masuk deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 }
 
 // ─── useAmbientListener ───────────────────────────────────────────────────────
@@ -212,8 +218,10 @@ export function useAmbientListener({ enabled, silenceMs = 3000, onData }: Ambien
   }, [fireSilence, silenceMs]);
 
   useEffect(() => {
-    destroyedRef.current = false; // reset saat effect baru mount
-    if (!enabled) { enabledRef.current = false; stop(); return () => stop(); }
+    // BUG-FIX #4: reset destroyedRef HANYA jika enabled=true, bukan selalu
+    // Cegah race condition jika enabled berubah true→false→true dengan cepat
+    if (!enabled) { enabledRef.current = false; destroyedRef.current = true; stop(); return () => stop(); }
+    destroyedRef.current = false;
     let cleanupCalled = false;
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(stream => { if (cleanupCalled) { stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ok */ } }); return; } stream.getTracks().forEach(t => _globalMicTracks.add(t)); ambientStreamRef.current = stream; start(); })

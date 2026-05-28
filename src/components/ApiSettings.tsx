@@ -415,6 +415,13 @@ function DragOrderList({ items, onReorder, label, badge }: DragOrderListProps) {
   );
 }
 
+// ─── Rotation Event ──────────────────────────────────────────────────────────
+// Listener sederhana agar LandingPage bisa menampilkan label saat rotasi terjadi
+type RotationListener = (msg: string) => void;
+const _rotationListeners: Set<RotationListener> = new Set();
+export function onAiRotation(fn: RotationListener) { _rotationListeners.add(fn); return () => _rotationListeners.delete(fn); }
+function emitRotation(msg: string) { _rotationListeners.forEach(fn => fn(msg)); }
+
 // ─── AI Config Cache ──────────────────────────────────────────────────────────
 let _aiConfigCache: {
   providerId: string;
@@ -596,6 +603,7 @@ export async function callActiveAI(
 
       const apiKey = keys[keyIdx];
       console.debug(`[CENNA:callActiveAI] Mencoba ${provider.name} key #${keyIdx + 1}/${keys.length}, model: ${activeModel}`);
+      emitRotation(`Menghubungi ${provider.name}… (key #${keyIdx + 1}/${keys.length})`);
 
       try {
         const result = await provider.callFn(
@@ -612,6 +620,7 @@ export async function callActiveAI(
         if (isExhaustedError(e)) {
           // Token habis / rate-limit / key tidak valid → blacklist key ini sementara
           blacklistKey(provider.id, keyIdx);
+          emitRotation(`${provider.name} key #${keyIdx + 1} habis — beralih ke key berikutnya…`);
           _keyRotationIndex[provider.id] = (keyIdx + 1) % keys.length;
           triedCount++;
           // Langsung coba key berikutnya pada provider yang sama
@@ -625,6 +634,7 @@ export async function callActiveAI(
     }
 
     console.warn(`[CENNA:callActiveAI] Semua key ${provider.name} gagal — mencoba provider berikutnya...`);
+    emitRotation(`${provider.name} tidak tersedia — mencoba provider berikutnya…`);
   }
 
   // Semua provider gagal
