@@ -34,21 +34,46 @@ function isAdminRoute(): boolean {
   return window.location.pathname.startsWith('/admin');
 }
 
+/** Simpan page aktif admin ke sessionStorage agar persist saat refresh */
+function saveAdminPage(p: ActivePage) {
+  if (p !== 'landing' && p !== 'login') {
+    sessionStorage.setItem('CENNA_ADMIN_PAGE', p);
+  } else {
+    sessionStorage.removeItem('CENNA_ADMIN_PAGE');
+  }
+}
+
+/** Ambil halaman admin terakhir dari sessionStorage */
+function restoreAdminPage(): ActivePage {
+  const saved = sessionStorage.getItem('CENNA_ADMIN_PAGE') as ActivePage | null;
+  const valid: ActivePage[] = ['dashboard', 'ai', 'templates', 'api', 'logs', 'settings'];
+  return saved && valid.includes(saved) ? saved : 'dashboard';
+}
+
 export default function App() {
   const [page, setPage] = useState<ActivePage>('landing');
   const [adminSession, setAdminSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
 
+  // Wrapper setPage yang juga menyimpan ke sessionStorage
+  const navigateTo = (p: ActivePage) => {
+    saveAdminPage(p);
+    setPage(p);
+  };
+
   // ─ Boot: restore session from Supabase Auth ──────────────────────────────
   useEffect(() => {
     async function boot() {
       const session = await sbGetSession();
-      if (session && isAdminRoute()) {
+      if (session) {
+        // Ada sesi aktif — pulihkan halaman admin terakhir
         setAdminSession(session);
         await loadAllData();
-        setPage('dashboard');
-      } else if (!session && isAdminRoute()) {
+        const lastPage = restoreAdminPage();
+        setPage(lastPage);
+      } else if (isAdminRoute()) {
+        // URL /admin tapi tidak ada sesi → tampilkan login
         setPage('login');
       } else {
         setPage('landing');
@@ -74,13 +99,14 @@ export default function App() {
   const handleLoginSuccess = async (session: any) => {
     setAdminSession(session);
     await loadAllData();
-    setPage('dashboard');
+    navigateTo('dashboard');
   };
 
   const handleLogout = async () => {
     if (confirm('Yakin ingin keluar dari Admin Panel?')) {
       await sbSignOut();
       setAdminSession(null);
+      sessionStorage.removeItem('CENNA_ADMIN_PAGE');
       setPage(isAdminRoute() ? 'login' : 'landing');
     }
   };
@@ -175,7 +201,7 @@ export default function App() {
           </div>
           <button
             id="btn-sidebar-dash"
-            onClick={() => setPage('dashboard')}
+            onClick={() => navigateTo('dashboard')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'dashboard' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -188,7 +214,7 @@ export default function App() {
           </div>
           <button
             id="btn-sidebar-ai"
-            onClick={() => setPage('ai')}
+            onClick={() => navigateTo('ai')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'ai' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -197,7 +223,7 @@ export default function App() {
           </button>
           <button
             id="btn-sidebar-templates"
-            onClick={() => setPage('templates')}
+            onClick={() => navigateTo('templates')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'templates' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -206,7 +232,7 @@ export default function App() {
           </button>
           <button
             id="btn-sidebar-api"
-            onClick={() => setPage('api')}
+            onClick={() => navigateTo('api')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'api' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -219,7 +245,7 @@ export default function App() {
           </div>
           <button
             id="btn-sidebar-logs"
-            onClick={() => setPage('logs')}
+            onClick={() => navigateTo('logs')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'logs' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -233,7 +259,7 @@ export default function App() {
           </button>
           <button
             id="btn-sidebar-settings"
-            onClick={() => setPage('settings')}
+            onClick={() => navigateTo('settings')}
             className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left border-none cursor-pointer transition text-xs font-semibold ${
               page === 'settings' ? 'bg-white/12 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
@@ -281,6 +307,7 @@ export default function App() {
               onClick={async () => {
                 await sbSignOut();
                 setAdminSession(null);
+                sessionStorage.removeItem('CENNA_ADMIN_PAGE');
                 setPage('landing');
               }}
               className="px-3 py-1.5 rounded-full border border-gray-200 text-[#1e2a4a] text-xs font-semibold bg-white cursor-pointer hover:bg-slate-50 transition"
@@ -299,7 +326,7 @@ export default function App() {
           {page === 'dashboard' && (
             <Dashboard
               logs={logs}
-              onNavigate={(val) => setPage(val as ActivePage)}
+              onNavigate={(val) => navigateTo(val as ActivePage)}
             />
           )}
           {page === 'ai' && <AiConfig />}

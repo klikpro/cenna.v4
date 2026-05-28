@@ -303,8 +303,8 @@ interface DragOrderListProps {
   badge?: (item: DragOrderItem) => React.ReactNode;
 }
 function DragOrderList({ items, onReorder, label, badge }: DragOrderListProps) {
-  const [dragging, setDragging] = React.useRef<number | null>(null);
-  const [dragOver, setDragOver] = React.useRef<number | null>(null);
+  const dragging = React.useRef<number | null>(null);
+  const dragOver = React.useRef<number | null>(null);
   const [localItems, setLocalItems] = React.useState(items);
   const [dragIdx, setDragIdx] = React.useState<number | null>(null);
   const [overIdx, setOverIdx] = React.useState<number | null>(null);
