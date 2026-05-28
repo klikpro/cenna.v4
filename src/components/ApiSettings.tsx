@@ -1318,7 +1318,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
             </div>
             <DragOrderList
               label="Urutan Prioritas"
-              items={aiProviderOrder.map(id => {
+              items={(Array.isArray(aiProviderOrder) ? aiProviderOrder : AI_PROVIDERS.map(p => p.id)).map(id => {
                 const p = AI_PROVIDERS.find(x => x.id === id)!;
                 const hasKey = (providerKeys[id] || []).some(k => k.trim());
                 return { id, icon: p?.icon || '🤖', name: p?.name || id, sub: p?.models[0]?.label, hasKey };
@@ -1668,7 +1668,7 @@ export default function ApiSettings({ onSettingsSaved }: ApiSettingsProps) {
                   azure:      azureTtsKeys.some(k => k.trim()),
                   browser:    true,
                 };
-                return ttsOrder.map(id => ({
+                return (Array.isArray(ttsOrder) ? ttsOrder : TTS_ORDER_DEFAULTS).map(id => ({
                   id,
                   icon: TTS_META[id]?.icon || '🔊',
                   name: TTS_META[id]?.name || id,
